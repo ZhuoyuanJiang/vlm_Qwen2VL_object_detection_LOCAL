@@ -790,9 +790,9 @@ from trl import SFTConfig
 # TASK: create an SFT config
 
 training_args = SFTConfig(
-    # Output and logging
-    output_dir="./qwen2vl-nutrition-detection-lora",
-    logging_dir="./logs",
+    # Output and logging - SAVE TO SSD TO AVOID HOME DIRECTORY QUOTA
+    output_dir="/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora",
+    logging_dir="/ssd1/zhuoyuan/vlm_outputs/logs",
     logging_steps=10,
     
     # Training hyperparameters
@@ -820,8 +820,8 @@ training_args = SFTConfig(
     eval_strategy="steps",
     eval_steps=50,
     save_strategy="steps",
-    save_steps=100,
-    save_total_limit=3,
+    save_steps=300,  # Changed from 100 to 300 - fewer checkpoints
+    save_total_limit=3,  # Only keep last 3 checkpoints
     load_best_model_at_end=True,
     metric_for_best_model="eval_loss",
     greater_is_better=False,
@@ -1455,8 +1455,8 @@ clear_memory()
 print("\nMerging LoRA weights into base model for deployment...")
 merged_model = model_finetuned.merge_and_unload()
 
-# Save the merged model
-merged_output_dir = "./qwen2vl-nutrition-detection-merged"
+# Save the merged model to SSD
+merged_output_dir = "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-merged"
 merged_model.save_pretrained(merged_output_dir)
 processor_finetuned.save_pretrained(merged_output_dir)
 

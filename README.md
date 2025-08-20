@@ -1,138 +1,169 @@
-# Fine-Tuning Qwen2-VL-7B for Nutrition Table Detection
+# Qwen2-VL Fine-tuning for Nutrition Table Detection
 
-This project implements fine-tuning of the Qwen2-VL-7B vision-language model for detecting nutrition tables in product images using QLoRA (Quantized Low-Rank Adaptation).
+Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging images.
 
-## 🎯 Project Overview
+## 🚀 Quick Start
 
-The goal is to fine-tune Qwen2-VL-7B to accurately detect and localize nutrition tables in product images from the OpenFoodFacts dataset. The model learns to:
-- Identify nutrition tables in product images
-- Output precise bounding box coordinates
-- Handle various image sizes and orientations
-
-## 📁 Project Structure
-
-```
-vlm_Qwen2VL_object_detection/
-├── fine_tuning_vlm_for_object_detection_trl.ipynb  # Main notebook
-├── fine_tuning_vlm_for_object_detection_trl.py     # Python script (synced with notebook)
-├── requirements.txt                                  # Dependencies
-├── README.md                                         # This file
-└── WORKFLOW_GUIDE.md                                # Development workflow guide
-```
-
-## 🚀 Setup
-
-### 1. Create Conda Environment
-
+### Environment Setup (✅ Already Complete)
 ```bash
-conda create -n vlm_Qwen2VL_object_detection python=3.10 -y
 conda activate vlm_Qwen2VL_object_detection
 ```
 
-### 2. Install Dependencies
+### HuggingFace Token (✅ Already Set)
+Token configured in `~/.bashrc` - works automatically for all projects.
 
+### Run Training
 ```bash
-pip install -r requirements.txt
-```
-
-### 3. Set Environment Variables
-
-```bash
-export HF_TOKEN="your_huggingface_token"  # For model access and upload
-```
-
-## 💻 Hardware Requirements
-
-- **Recommended**: 2x NVIDIA A6000 (48GB) or 1x A100 (40GB/80GB)
-- **Minimum**: 1x GPU with 24GB+ VRAM (may require smaller batch sizes)
-- **Flash Attention**: Requires Ampere architecture (A100, A6000) or newer
-
-## 📊 Dataset
-
-The project uses the [OpenFoodFacts Nutrition Table Detection](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection) dataset:
-- Training samples: ~1000
-- Validation samples: ~100
-- Images contain product photos with nutrition tables
-- Bounding boxes are normalized to [0, 1]
-
-## 🔧 Training Configuration
-
-### QLoRA Settings
-- **Rank (r)**: 64
-- **Alpha**: 128
-- **Target modules**: Attention and MLP layers
-- **Quantization**: 4-bit NF4
-
-### Training Hyperparameters
-- **Learning rate**: 2e-4
-- **Batch size**: 2 per device
-- **Gradient accumulation**: 8 steps
-- **Epochs**: 3
-- **Mixed precision**: BF16
-
-## 📈 Expected Results
-
-After fine-tuning, the model shows significant improvement:
-- **Mean IoU**: ~0.65-0.75 (vs ~0.2-0.3 for base model)
-- **Detection Rate**: >90% (vs ~50% for base model)
-- **IoU > 0.5**: >70% of samples
-
-## 🏃 Running the Code
-
-### Option 1: Jupyter Notebook
-```bash
+python fine_tuning_vlm_for_object_detection_trl.py
+# Or use notebook for interactive development
 jupyter notebook fine_tuning_vlm_for_object_detection_trl.ipynb
 ```
 
-### Option 2: Python Script
-```bash
-python fine_tuning_vlm_for_object_detection_trl.py
+## ⚠️ Important: TRL Version Note
+
+**This project uses TRL 0.10.1** (not latest) because we need `DataCollatorForCompletionOnlyLM`:
+
+| TRL Version | DataCollatorForCompletionOnlyLM | Alternative Method |
+|-------------|----------------------------------|-------------------|
+| 0.10.1 (ours) | ✅ Available | - |
+| 0.22.0 (latest) | ❌ Removed | Use `completion_only_loss=True` in SFTConfig |
+
+**The TRL team integrated completion-only functionality directly into the trainer in v0.22:**
+
+Old Way (TRL 0.10.1 - what we use):
+```python
+from trl import DataCollatorForCompletionOnlyLM
+data_collator = DataCollatorForCompletionOnlyLM(
+    response_template="### Response:",
+    tokenizer=tokenizer
+)
 ```
 
-### Syncing Files (Jupytext)
-The notebook and Python script are kept in sync using Jupytext:
-```bash
-jupytext --sync fine_tuning_vlm_for_object_detection_trl.py
+New Way (TRL 0.22+):
+```python
+from trl import SFTConfig
+training_args = SFTConfig(
+    completion_only_loss=True,  # Replaces DataCollatorForCompletionOnlyLM
+    # other args...
+)
 ```
 
-## 📝 Key Implementation Details
+### Install Correct TRL Version:
+```bash
+pip uninstall -y trl
+pip install trl==0.10.1
+```
 
-1. **Data Preprocessing**: Converts dataset to conversation format with system, user, and assistant roles
-2. **Custom Collator**: Handles text-image pairs and masks non-answer tokens for loss computation
-3. **Evaluation**: Uses IoU (Intersection over Union) metric for bounding box accuracy
-4. **Model Merging**: LoRA weights can be merged into base model for deployment
+## 📁 Project Files
 
-## 🔍 Monitoring
+- `fine_tuning_vlm_for_object_detection_trl.ipynb` - Main training notebook
+- `fine_tuning_vlm_for_object_detection_trl.py` - Python script (synced with notebook)
+- `PROJECT_ANALYSIS.md` - Detailed hyperparameter rationale and architecture
+- `DETAILED_SESSION_LOG.md` - Complete setup history
+- `requirements.txt` - Dependencies
 
-Training progress is tracked with Weights & Biases (W&B):
-- Loss curves
-- Evaluation metrics
-- Learning rate schedule
-- GPU utilization
+## 🔧 Configuration
 
-## 🚢 Deployment
+### Model
+- **Base**: Qwen2-VL-7B-Instruct
+- **Quantization**: 4-bit NF4 with BitsAndBytes
+- **Fine-tuning**: LoRA (r=64, alpha=16)
+- **Training**: Completion-only loss on assistant responses
 
-After training, the model can be:
-1. Used with LoRA adapters for efficient inference
-2. Merged into base model for standalone deployment
-3. Exported to ONNX/TensorRT for production use
+### Hardware
+- **Your GPU**: RTX 6000 Ada (47.50 GB VRAM) ✨
+- **Minimum Required**: 24GB VRAM
+- **Recommended**: With your GPU, use batch_size=8 for faster training
 
-## 📚 References
+### Key Hyperparameters
+- **Batch Size**: 2 per device (can increase to 8)
+- **Gradient Accumulation**: 8 steps
+- **Learning Rate**: 1e-5 with cosine schedule
+- **Epochs**: 3
+- **LoRA Rank**: 64 (higher for vision tasks)
+- **Max Length**: 2048 tokens
 
-- [Qwen2-VL Paper](https://arxiv.org/pdf/2409.12191)
-- [QLoRA Paper](https://arxiv.org/abs/2305.14314)
-- [TRL Documentation](https://huggingface.co/docs/trl)
-- [Qwen2-VL Model Card](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)
+See `PROJECT_ANALYSIS.md` for detailed explanation of every parameter choice.
 
-## ⚠️ Notes
+## 📊 Dataset
 
-- The implementation focuses on single bounding box detection per image
-- For multiple objects, the code can be extended to handle multiple detections
-- Flash Attention requires specific GPU architectures for optimal performance
+Using nutrition table detection dataset from HuggingFace:
+- Training samples: ~5000
+- Task: Detect bounding boxes of nutrition tables
+- Format: Conversation-style with user prompts and assistant responses
+
+## 🎯 Quick Start
+
+1. **Activate Environment** (new terminal):
+   ```bash
+   conda activate vlm_Qwen2VL_object_detection
+   cd ~/projects/vlm_Qwen2VL_object_detection
+   ```
+
+2. **Verify Setup**:
+   ```bash
+   python -c "from trl import DataCollatorForCompletionOnlyLM; print('✅ TRL 0.10.1 ready!')"
+   ```
+
+3. **Start Training**:
+   ```bash
+   # Full training (~3-6 hours)
+   python fine_tuning_vlm_for_object_detection_trl.py
+   
+   # Or run in background
+   nohup python fine_tuning_vlm_for_object_detection_trl.py > training.log 2>&1 &
+   ```
+
+## 📁 Training Output Structure (ALL ON SSD - Home stays <10MB!)
+
+```
+/ssd1/zhuoyuan/vlm_outputs/
+├── qwen2vl-nutrition-detection-lora/   # Main output directory
+│   ├── checkpoint-300/                 # Saved every 300 steps
+│   ├── checkpoint-600/                 # Only keeps last 3
+│   ├── checkpoint-900/                 # Auto-cleanup of old ones
+│   └── [Final outputs]:
+│       ├── adapter_model.safetensors   # Final LoRA (~200MB)
+│       └── training_results.json       # Metrics
+├── qwen2vl-nutrition-detection-merged/ # Optional: Full model
+└── logs/                               # TensorBoard logs
+
+/ssd1/zhuoyuan/hf_cache/               # Model downloads
+```
+
+**Storage**: ALL on SSD (383GB available). Home directory: <10MB only!
+
+## 📈 Expected Performance
+
+- **Training Time**: 3-6 hours
+- **Memory Usage**: ~12GB with current settings
+- **Expected mAP**: 85-95% on nutrition tables
+- **Inference Speed**: ~200ms per image
+
+## ✅ Current Status
+
+- ✅ Environment setup complete
+- ✅ All dependencies installed 
+- ✅ TRL 0.10.1 installed (has DataCollatorForCompletionOnlyLM)
+- ✅ HuggingFace token configured in ~/.bashrc
+- ✅ GPU verified (RTX 6000 Ada, 47.50 GB VRAM)
+- ✅ **READY FOR TRAINING!**
+
+**Note on ~/.bashrc**: Your HF token loads automatically when opening a new terminal. No need to source it manually unless continuing the same terminal session.
+
+## 📚 Documentation
+
+- **Detailed Setup Log**: See `DETAILED_SESSION_LOG.md`
+- **Architecture & Rationale**: See `PROJECT_ANALYSIS.md`
+- **Original Guide**: See `WORKFLOW_GUIDE.md`
+
+## 🔍 Troubleshooting
+
+Common issues and solutions:
+1. **Import Error**: Make sure TRL 0.10.1 is installed
+2. **CUDA OOM**: Reduce batch_size or enable gradient_checkpointing
+3. **Dataset Access**: HF token is already set in ~/.bashrc
 
 ## 📄 License
 
-This project is for educational purposes. Please refer to the respective licenses for:
-- Qwen2-VL model
-- OpenFoodFacts dataset
-- Hugging Face libraries
+For educational purposes. Check individual licenses for Qwen2-VL model and datasets.

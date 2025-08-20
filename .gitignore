@@ -1,0 +1,39 @@
+
+# Security - never commit tokens
+.env
+*.env
+
+# Training outputs and model files
+qwen2vl-nutrition-detection-lora/
+qwen2vl-nutrition-detection-merged/
+model_cache/
+logs/
+training.log
+nohup.out
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test outputs
+test_outputs/
+
+# Weights and models
+*.safetensors
+*.bin
+*.pth
+*.pt
+
+# Wandb
+wandb/
+
+# System
+.DS_Store
+*.swp
+*.swo
