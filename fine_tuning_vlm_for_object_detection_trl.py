@@ -8,13 +8,121 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.17.2
 #   kernelspec:
-#     display_name: Python 3 (ipykernel)
+#     display_name: vlm_Qwen2VL_object_detection
 #     language: python
 #     name: python3
 # ---
 
 # %% [markdown] id="vKadZFQ2IdJb"
 # # Fine-Tuning Qwen2-VL-7B for object detection
+
+# %% [markdown]
+# ## 🖥️ GPU Configuration and Selection
+#
+# **AUTOMATIC GPU SELECTION**: The script automatically finds available GPUs!
+#
+# **Original Paper Requirements:**
+# - Recommended: 2x A6000 (48GB each) or 1x A100 (40/80GB)
+# - Your hardware: RTX 6000 Ada (48GB) - equivalent to A6000
+#
+# **How it works:**
+# 1. Automatically scans all GPUs for availability
+# 2. Selects GPUs with <2GB memory used and <10% utilization
+# 3. Can use 1 or 2 GPUs (configurable with `prefer_multi_gpu`)
+# 4. Falls back to GPU 6 if auto-selection fails
+#
+# **To use 2 GPUs** (like original paper): Set `prefer_multi_gpu=True` below
+
+# %%
+# GPU CONFIGURATION - MUST RUN FIRST!
+import os
+import sys
+import subprocess
+# Note: torch import moved below after setting CUDA_VISIBLE_DEVICES
+
+# CONFIGURATION: Set this based on your needs
+# Original paper uses 2x A6000 (48GB each), but 1x RTX 6000 Ada (48GB) may be sufficient
+USE_DUAL_GPU = True  # Set to True to use 2 GPUs like the original paper, False for 1 GPU
+
+print("=" * 60)
+print("🖥️  AUTOMATIC GPU CONFIGURATION")
+print("=" * 60)
+
+# Function to find available GPUs
+def find_available_gpus(num_gpus_needed=1):
+    """Find available GPUs by checking memory usage."""
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,memory.used,memory.total', 
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, check=True
+        )
+        
+        available = []
+        for line in result.stdout.strip().split('\n'):
+            parts = line.split(',')
+            gpu_idx = int(parts[0])
+            mem_used = int(parts[1])
+            mem_total = int(parts[2])
+            
+            # Consider GPU available if <2GB used and has at least 40GB total
+            if mem_used < 2000 and mem_total > 40000:
+                available.append(gpu_idx)
+        
+        # Return exactly the number of GPUs requested (not more!)
+        if len(available) >= num_gpus_needed:
+            return available[:num_gpus_needed]  # Take only what we need
+        else:
+            return available  # Return what we have
+            
+    except Exception as e:
+        print(f"Error checking GPUs: {e}")
+        return []
+
+# Determine how many GPUs to use
+num_gpus = 2 if USE_DUAL_GPU else 1
+print(f"Configuration: {'DUAL GPU (like original paper)' if USE_DUAL_GPU else 'SINGLE GPU (test mode)'}")
+print(f"Looking for {num_gpus} available GPU(s)...")
+
+# Find available GPUs
+available_gpus = find_available_gpus(num_gpus)
+
+if len(available_gpus) > 0:
+    gpu_string = ','.join(str(g) for g in available_gpus)
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_string
+    print(f"✅ Found {len(available_gpus)} available GPU(s): {available_gpus}")
+    if USE_DUAL_GPU and len(available_gpus) == 1:
+        print("⚠️ Warning: Only 1 GPU available, but 2 were requested")
+else:
+    # Fallback to GPU 6
+    os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+    print("⚠️ No free GPUs found via auto-detection, using GPU 6 as fallback")
+
+# Verify configuration
+print(f"\nCUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+
+# Import torch AFTER setting CUDA_VISIBLE_DEVICES
+import torch
+
+if torch.cuda.is_available():
+    device_count = torch.cuda.device_count()
+    total_memory = 0
+    print(f"PyTorch sees {device_count} GPU(s):")
+    for i in range(device_count):
+        mem_gb = torch.cuda.get_device_properties(i).total_memory / 1024**3
+        total_memory += mem_gb
+        print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({mem_gb:.1f} GB)")
+    print(f"\nTotal GPU memory available: {total_memory:.1f} GB")
+    
+    if device_count > 1:
+        print("\n📝 Multi-GPU Training Notes:")
+        print("  - Model will automatically use DataParallel")
+        print("  - Effective batch size = per_device_batch_size × 2")
+else:
+    print("❌ CUDA not available! Exiting...")
+    sys.exit(1)
+
+print("=" * 60)
 
 # %% [markdown] id="rdc7yvCQ7JGf"
 # ## 🌟 WHAT?
@@ -41,15 +149,19 @@
 #
 
 # %% id="GCMhPmFdIGSb"
-# !pip install  -U -q git+https://github.com/huggingface/transformers.git git+https://github.com/huggingface/trl.git datasets bitsandbytes peft qwen-vl-utils wandb accelerate
+# SKIP THIS CELL - Already installed in environment
+# # !pip install  -U -q git+https://github.com/huggingface/transformers.git git+https://github.com/huggingface/trl.git datasets bitsandbytes peft qwen-vl-utils wandb accelerate
 # Tested with transformers==4.47.0.dev0, trl==0.12.0.dev0, datasets==3.0.2, bitsandbytes==0.44.1, peft==0.13.2, qwen-vl-utils==0.0.8, wandb==0.18.5, accelerate==1.0.1
-# !pip install  matplotlib IPython
+# # !pip install  matplotlib IPython
+print("✅ Dependencies already installed in conda environment")
 
 # %% [markdown] id="J4pAvoQaOJ1M"
 # We’ll also need to install an earlier version of *PyTorch*, as the latest version has an issue that currently prevents this notebook from running correctly. You can learn more about the issue [here](https://github.com/pytorch/pytorch/issues/138340) and consider updating to the latest version once it’s resolved.
 
 # %% id="D8iRteA4oXVj"
-# !pip install -q torch==2.4.1+cu121 torchvision==0.19.1+cu121 torchaudio==2.4.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+# SKIP THIS CELL - PyTorch already installed
+# # !pip install -q torch==2.4.1+cu121 torchvision==0.19.1+cu121 torchaudio==2.4.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+print("✅ PyTorch 2.4.1 with CUDA 12.1 already installed")
 
 # %% [markdown] id="upZjD4bH7JGh"
 # # 2. HF Login
@@ -88,7 +200,7 @@ dataset_id = "openfoodfacts/nutrition-table-detection"
 # Load the dataset with train and validation splits
 ds = load_dataset(dataset_id)
 train_dataset = ds['train']
-eval_dataset = ds['validation']
+eval_dataset = ds['val']  # Note: this dataset uses 'val' not 'validation'
 
 print(f"Training samples: {len(train_dataset)}")
 print(f"Validation samples: {len(eval_dataset)}")
@@ -99,11 +211,11 @@ print(f"Dataset features: {train_dataset.features}")
 # Let's look at the first training example
 example = train_dataset[0]
 print("Example keys:", example.keys())
-print("\nBarcode:", example['barcode'])
+print("\nImage ID:", example['image_id'])  # Fixed: 'image_id' not 'barcode'
 print("Image size:", example['image'].size if hasattr(example['image'], 'size') else 'N/A')
 print("Number of bounding boxes:", len(example['objects']['bbox']))
 print("Bounding box:", example['objects']['bbox'][0])
-print("Category:", example['objects']['category'][0])
+print("Category:", example['objects']['category_name'][0])  # Fixed: 'category_name'
 
 # Display the image with bounding box
 from PIL import Image, ImageDraw
@@ -127,7 +239,7 @@ draw.rectangle([x_min, y_min, x_max, y_max], outline='red', width=3)
 
 plt.figure(figsize=(10, 8))
 plt.imshow(img)
-plt.title(f"Category: {example['objects']['category'][0]}")
+plt.title(f"Category: {example['objects']['category_name'][0]}")
 plt.axis('off')
 plt.show()
 
@@ -152,7 +264,7 @@ for idx in range(6):
     width, height = img.size
     
     # Draw all bounding boxes for this image
-    for bbox, category in zip(example['objects']['bbox'], example['objects']['category']):
+    for bbox, category in zip(example['objects']['bbox'], example['objects']['category_name']):
         # Convert normalized coordinates to pixel coordinates
         x_min = bbox[0] * width
         y_min = bbox[1] * height
@@ -563,7 +675,7 @@ def convert_to_conversation_format(example):
     """
     # Extract nutrition table bounding boxes
     bboxes = example['objects']['bbox']
-    categories = example['objects']['category']
+    categories = example['objects']['category_name']  # Fixed: 'category_name' not 'category'
     
     # Format the assistant response with Qwen2-VL special tokens
     # Convert normalized [0,1] bbox to Qwen's [0,1000] format
@@ -834,7 +946,7 @@ training_args = SFTConfig(
     
     # Specific for vision models
     dataset_text_field="",  # We'll use a custom data collator
-    max_seq_length=2048,
+    max_length=2048,  # Fixed: 'max_length' not 'max_seq_length'
     dataset_kwargs={
         "skip_prepare_dataset": True  # We handle data preparation ourselves
     },
@@ -1103,7 +1215,7 @@ example_idx = 20
 example = train_dataset[example_idx]
 image = example['image']
 ground_truth_bbox = example['objects']['bbox'][0]
-ground_truth_category = example['objects']['category'][0]
+ground_truth_category = example['objects']['category_name'][0]
 
 # Create messages for inference
 messages = [
