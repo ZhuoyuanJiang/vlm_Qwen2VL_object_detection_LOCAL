@@ -626,6 +626,22 @@ def convert_to_conversation_format(example):
 
 # %% id="oSHNqk0dkxii"
 # Task: apply the function above to all samples in the training and eval datasets
+train_dataset_formatted = train_dataset.map(convert_to_conversation_format)
+eval_dataset_formatted = eval_dataset.map(convert_to_conversation_format)
+
+print(f"Formatted training samples: {len(train_dataset_formatted)}")
+print(f"Formatted evaluation samples: {len(eval_dataset_formatted)}")
+
+# Check a sample
+sample_formatted = train_dataset_formatted[0]
+print("\nSample formatted message structure:")
+for msg in sample_formatted['messages']:
+    print(f"  Role: {msg['role']}")
+    for content in msg['content']:
+        if content['type'] == 'text':
+            print(f"    Text: {content['text'][:100]}..." if len(content['text']) > 100 else f"    Text: {content['text']}")
+        elif content['type'] == 'image':
+            print(f"    Image: {content['image'].size if hasattr(content['image'], 'size') else 'PIL Image'}")
 
 
 # %% [markdown] id="Sw3b76rawti6"
@@ -675,7 +691,38 @@ clear_memory()
 
 # %% id="zm_bJRrXsESg"
 # TASK: load the NF4 model and processor
+from transformers import BitsAndBytesConfig, Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+import torch
 
+# Configure 4-bit quantization for QLoRA
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+model_id = "Qwen/Qwen2-VL-7B-Instruct"
+
+# Load the model with 4-bit quantization
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_id,
+    quantization_config=bnb_config,
+    device_map="auto",
+    torch_dtype=torch.bfloat16,
+    attn_implementation="flash_attention_2",  # Use Flash Attention 2 for efficiency
+    trust_remote_code=True,
+)
+
+# Load processor
+processor = Qwen2VLProcessor.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+)
+
+print(f"Model loaded: {model_id}")
+print(f"Model device map: {model.hf_device_map}")
+print(f"Model memory footprint: {model.get_memory_footprint() / 1024**3:.2f} GB")
 
 
 # %% [markdown] id="65wfO29isQlX"
@@ -708,6 +755,24 @@ clear_memory()
 from peft import LoraConfig, get_peft_model
 # Task: create LoRA config and apply LoRA to the model instrance created above
 
+# Configure LoRA
+lora_config = LoraConfig(
+    r=64,  # Rank
+    lora_alpha=128,  # Alpha scaling
+    lora_dropout=0.1,  # Dropout probability
+    bias="none",
+    task_type="CAUSAL_LM",
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",  # Attention layers
+        "gate_proj", "up_proj", "down_proj",  # MLP layers
+    ],
+)
+
+print("LoRA Configuration:")
+print(f"  Rank (r): {lora_config.r}")
+print(f"  Alpha: {lora_config.lora_alpha}")
+print(f"  Dropout: {lora_config.lora_dropout}")
+print(f"  Target modules: {lora_config.target_modules}")
 
 # %% [markdown] id="A1t7Hk_f7JGn"
 # Next, you need to create an SFT config for model finetuning. This step is critical for model convergence.
@@ -724,6 +789,63 @@ from peft import LoraConfig, get_peft_model
 from trl import SFTConfig
 # TASK: create an SFT config
 
+training_args = SFTConfig(
+    # Output and logging
+    output_dir="./qwen2vl-nutrition-detection-lora",
+    logging_dir="./logs",
+    logging_steps=10,
+    
+    # Training hyperparameters
+    num_train_epochs=3,
+    per_device_train_batch_size=2,  # Adjust based on GPU memory
+    per_device_eval_batch_size=2,
+    gradient_accumulation_steps=8,  # Effective batch size = 2 * 8 = 16
+    gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
+    
+    # Learning rate and optimization
+    learning_rate=2e-4,
+    warmup_steps=100,
+    lr_scheduler_type="cosine",
+    optim="adamw_torch",
+    adam_beta2=0.999,
+    weight_decay=0.01,
+    max_grad_norm=1.0,
+    
+    # Mixed precision and performance
+    bf16=True,  # Use bfloat16 precision
+    tf32=True,  # Enable TF32 on Ampere GPUs
+    dataloader_num_workers=4,
+    
+    # Evaluation and saving
+    eval_strategy="steps",
+    eval_steps=50,
+    save_strategy="steps",
+    save_steps=100,
+    save_total_limit=3,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    
+    # Other settings
+    remove_unused_columns=False,
+    push_to_hub=False,
+    report_to="wandb",  # Enable wandb logging
+    run_name="qwen2vl-nutrition-detection",
+    
+    # Specific for vision models
+    dataset_text_field="",  # We'll use a custom data collator
+    max_seq_length=2048,
+    dataset_kwargs={
+        "skip_prepare_dataset": True  # We handle data preparation ourselves
+    },
+)
+
+print("Training Configuration:")
+print(f"  Learning rate: {training_args.learning_rate}")
+print(f"  Batch size per device: {training_args.per_device_train_batch_size}")
+print(f"  Gradient accumulation steps: {training_args.gradient_accumulation_steps}")
+print(f"  Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
+print(f"  Number of epochs: {training_args.num_train_epochs}")
 
 # %% [markdown] id="wjQGt-iZVyef"
 # # wandb setup
@@ -736,7 +858,24 @@ from trl import SFTConfig
 import wandb
 # TASK: set up wand.init
 
+# Initialize Weights & Biases for experiment tracking
+wandb.init(
+    project="qwen2vl-nutrition-detection",
+    name="qwen2vl-7b-nutrition-lora",
+    config={
+        "model": model_id,
+        "lora_r": lora_config.r,
+        "lora_alpha": lora_config.lora_alpha,
+        "learning_rate": training_args.learning_rate,
+        "batch_size": training_args.per_device_train_batch_size,
+        "gradient_accumulation": training_args.gradient_accumulation_steps,
+        "epochs": training_args.num_train_epochs,
+        "dataset": "openfoodfacts/nutrition-table-detection",
+    },
+    tags=["qwen2-vl", "object-detection", "nutrition-table", "lora"],
+)
 
+print("W&B initialized for experiment tracking")
 
 # %% [markdown] id="pOUrD9P-y-Kf"
 # ## Training the Model 🏃
@@ -783,7 +922,89 @@ import wandb
 
 # %% id="pAzDovzylQeZ"
 # TASK: Create a data collator to encode text and image pairs
+from qwen_vl_utils import process_vision_info
+import torch
 
+def collate_fn(batch):
+    """
+    Data collator for Qwen2-VL that processes text-image pairs for training.
+    
+    Args:
+        batch: List of samples from the dataset, each containing 'messages'
+        
+    Returns:
+        Dict with input_ids, attention_mask, pixel_values, and labels
+    """
+    # Extract messages from each sample
+    messages_list = [sample['messages'] for sample in batch]
+    
+    # Apply chat template to each conversation
+    texts = []
+    images_list = []
+    
+    for messages in messages_list:
+        # Apply chat template
+        text = processor.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=False
+        )
+        texts.append(text)
+        
+        # Process vision information
+        image_inputs, video_inputs = process_vision_info(messages)
+        images_list.append(image_inputs)
+    
+    # Process all texts and images together
+    batch_inputs = processor(
+        text=texts,
+        images=images_list,
+        padding=True,
+        truncation=True,
+        max_length=2048,
+        return_tensors="pt"
+    )
+    
+    # Create labels for training (copy input_ids)
+    labels = batch_inputs["input_ids"].clone()
+    
+    # Mask padding tokens in labels
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    
+    # Mask image tokens in labels to not compute loss on them
+    # Find and mask special vision tokens
+    if hasattr(processor, "image_token_id"):
+        labels[labels == processor.image_token_id] = -100
+    
+    # Find and mask vision start/end tokens
+    for special_token in ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"]:
+        if special_token in processor.tokenizer.special_tokens_map.values():
+            token_id = processor.tokenizer.convert_tokens_to_ids(special_token)
+            labels[labels == token_id] = -100
+    
+    # Also mask the system and user parts, keeping only assistant response for loss
+    # This is done by finding the assistant token positions
+    for i, text in enumerate(texts):
+        # Find where assistant response starts
+        assistant_start = text.find("assistant") 
+        if assistant_start != -1:
+            # Tokenize just the part before assistant response
+            prefix_tokens = processor.tokenizer(
+                text[:assistant_start],
+                add_special_tokens=False,
+                return_tensors="pt"
+            )
+            prefix_len = prefix_tokens["input_ids"].shape[1]
+            
+            # Mask everything before the assistant response
+            if prefix_len < labels.shape[1]:
+                labels[i, :prefix_len] = -100
+    
+    batch_inputs["labels"] = labels
+    
+    return batch_inputs
+
+print("Data collator function created successfully")
 
 # %% [markdown] id="skbpTuJlV8qN"
 # Now, we will define the [SFTTrainer](https://huggingface.co/docs/trl/sft_trainer), which is a wrapper around the [transformers.Trainer](https://huggingface.co/docs/transformers/main_classes/trainer) class and inherits its attributes and methods. This class simplifies the fine-tuning process by properly initializing the [PeftModel](https://huggingface.co/docs/peft/v0.6.0/package_reference/peft_model) when a [PeftConfig](https://huggingface.co/docs/peft/v0.6.0/en/package_reference/config#peft.PeftConfig) object is provided. By using `SFTTrainer`, we can efficiently manage the training workflow and ensure a smooth fine-tuning experience for our Vision Language Model.
@@ -794,6 +1015,32 @@ import wandb
 from trl import SFTTrainer
 # TASK: Create the SFT trainer and launch training
 
+# Create the trainer
+trainer = SFTTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset_formatted,
+    eval_dataset=eval_dataset_formatted,
+    data_collator=collate_fn,
+    tokenizer=processor.tokenizer,
+    peft_config=lora_config,
+)
+
+print("SFTTrainer created successfully")
+print(f"Total training samples: {len(train_dataset_formatted)}")
+print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
+print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
+
+# Launch training
+print("\nStarting training...")
+trainer.train()
+
+# Save the final model
+print("\nSaving the fine-tuned model...")
+trainer.save_model(training_args.output_dir)
+processor.save_pretrained(training_args.output_dir)
+
+print(f"Model saved to {training_args.output_dir}")
 
 # %% [markdown] id="6yx_sGW42dN3"
 # # 5. Testing the Fine-Tuned Model 🔍
@@ -813,14 +1060,140 @@ clear_memory()
 
 # %% id="EFqTNUud2lA7"
 # TASK:  Load model, processor, and adapter weights
+from peft import PeftModel
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+import torch
 
+# Path to saved LoRA adapters
+adapter_path = "./qwen2vl-nutrition-detection-lora"
+
+# Load the base model
+base_model_id = "Qwen/Qwen2-VL-7B-Instruct"
+model_finetuned = Qwen2VLForConditionalGeneration.from_pretrained(
+    base_model_id,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+    attn_implementation="flash_attention_2",
+)
+
+# Load the LoRA adapters
+model_finetuned = PeftModel.from_pretrained(
+    model_finetuned,
+    adapter_path,
+    torch_dtype=torch.bfloat16,
+)
+
+# Load processor
+processor_finetuned = Qwen2VLProcessor.from_pretrained(adapter_path)
+
+print(f"Loaded fine-tuned model from {adapter_path}")
+print(f"Model has {sum(p.numel() for p in model_finetuned.parameters() if p.requires_grad):,} trainable parameters")
 
 # %% [markdown] id="pqryChyLWRmR"
 # Test the fine-tuned model on the example above, where the model previously struggled to accurately locate the nutrition table.
 
 # %% id="LH6fWLid7JGp"
 # TASK: test on the #20 training example
+from qwen_vl_utils import process_vision_info
+import matplotlib.pyplot as plt
+from PIL import ImageDraw
 
+# Get example #20 from training set
+example_idx = 20
+example = train_dataset[example_idx]
+image = example['image']
+ground_truth_bbox = example['objects']['bbox'][0]
+ground_truth_category = example['objects']['category'][0]
+
+# Create messages for inference
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "image": image,
+            },
+            {
+                "type": "text",
+                "text": "Detect the bounding box of the nutrition table.",
+            },
+        ],
+    }
+]
+
+# Apply chat template
+text = processor_finetuned.apply_chat_template(
+    messages, tokenize=False, add_generation_prompt=True
+)
+
+# Process vision information
+image_inputs, video_inputs = process_vision_info(messages)
+
+# Prepare inputs
+inputs = processor_finetuned(
+    text=[text],
+    images=image_inputs,
+    videos=video_inputs,
+    padding=True,
+    return_tensors="pt"
+).to(model_finetuned.device)
+
+# Generate prediction
+with torch.no_grad():
+    generated_ids = model_finetuned.generate(
+        **inputs,
+        max_new_tokens=128,
+        do_sample=False,
+    )
+
+# Decode the output
+generated_ids_trimmed = [
+    out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+]
+output_text = processor_finetuned.batch_decode(
+    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+)[0]
+
+print(f"Example #{example_idx}")
+print(f"Ground truth category: {ground_truth_category}")
+print(f"Ground truth bbox (normalized): {ground_truth_bbox}")
+print(f"\nModel output: {output_text}")
+
+# Parse the model output
+parsed_bbox = parse_qwen_bbox_output(output_text)
+if parsed_bbox:
+    print(f"Parsed prediction: {parsed_bbox}")
+
+# Visualize the results
+fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+# Ground truth
+img_gt = image.copy()
+draw_gt = ImageDraw.Draw(img_gt)
+width, height = img_gt.size
+x_min = ground_truth_bbox[0] * width
+y_min = ground_truth_bbox[1] * height
+x_max = ground_truth_bbox[2] * width
+y_max = ground_truth_bbox[3] * height
+draw_gt.rectangle([x_min, y_min, x_max, y_max], outline='green', width=3)
+
+axes[0].imshow(img_gt)
+axes[0].set_title(f"Ground Truth: {ground_truth_category}")
+axes[0].axis('off')
+
+# Model prediction
+if parsed_bbox:
+    img_pred = visualize_bbox_on_image(image, parsed_bbox, normalize_coords=True)
+    axes[1].imshow(img_pred)
+    axes[1].set_title(f"Model Prediction: {parsed_bbox['object']}")
+else:
+    axes[1].imshow(image)
+    axes[1].set_title("Model Prediction: No detection")
+axes[1].axis('off')
+
+plt.tight_layout()
+plt.show()
 
 # %% [markdown] id="swibyq5AWctZ"
 # Since this sample is drawn from the training set, the model has encountered it during training, which may be seen as a form of cheating. To gain a more comprehensive understanding of the model's performance, you should also evaluate it using the eval dataset. For this, write an evaluation script that measures the IoU metric between the ground truth box and the predicted boundig box.
@@ -829,10 +1202,239 @@ clear_memory()
 # %% id="czZSBgnoef1E"
 # Task: write the eval function. You can use use ops.box_iou
 from torchvision import ops
+import numpy as np
+from tqdm import tqdm
 
+def evaluate_model(model, processor_model, dataset, num_samples=50):
+    """
+    Evaluate the model on a dataset using IoU metric.
+    
+    Args:
+        model: The model to evaluate
+        processor_model: The processor for the model
+        dataset: The evaluation dataset
+        num_samples: Number of samples to evaluate
+        
+    Returns:
+        Dict with evaluation metrics
+    """
+    ious = []
+    successful_detections = 0
+    total_samples = min(num_samples, len(dataset))
+    
+    for idx in tqdm(range(total_samples), desc="Evaluating"):
+        example = dataset[idx]
+        image = example['image']
+        ground_truth_bbox = example['objects']['bbox'][0]  # Take first bbox
+        
+        # Create messages for inference
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": "Detect the bounding box of the nutrition table."},
+                ],
+            }
+        ]
+        
+        try:
+            # Apply chat template
+            text = processor_model.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            
+            # Process vision information
+            image_inputs, video_inputs = process_vision_info(messages)
+            
+            # Prepare inputs
+            inputs = processor_model(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            ).to(model.device)
+            
+            # Generate prediction
+            with torch.no_grad():
+                generated_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    do_sample=False,
+                )
+            
+            # Decode output
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
+            output_text = processor_model.batch_decode(
+                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )[0]
+            
+            # Parse the model output
+            parsed_bbox = parse_qwen_bbox_output(output_text)
+            
+            if parsed_bbox:
+                successful_detections += 1
+                
+                # Convert predicted bbox from Qwen format (1000x1000) to normalized [0,1]
+                if isinstance(parsed_bbox, list):
+                    pred_bbox = parsed_bbox[0]['bbox']
+                else:
+                    pred_bbox = parsed_bbox['bbox']
+                
+                # Normalize predicted bbox from 1000x1000 to 0-1
+                pred_bbox_norm = [
+                    pred_bbox[0] / 1000.0,
+                    pred_bbox[1] / 1000.0,
+                    pred_bbox[2] / 1000.0,
+                    pred_bbox[3] / 1000.0
+                ]
+                
+                # Convert to tensor for IoU calculation
+                gt_tensor = torch.tensor([[ground_truth_bbox[0], ground_truth_bbox[1], 
+                                          ground_truth_bbox[2], ground_truth_bbox[3]]], dtype=torch.float32)
+                pred_tensor = torch.tensor([[pred_bbox_norm[0], pred_bbox_norm[1],
+                                           pred_bbox_norm[2], pred_bbox_norm[3]]], dtype=torch.float32)
+                
+                # Calculate IoU
+                iou = ops.box_iou(pred_tensor, gt_tensor).item()
+                ious.append(iou)
+            else:
+                ious.append(0.0)  # No detection counts as 0 IoU
+                
+        except Exception as e:
+            print(f"Error processing sample {idx}: {e}")
+            ious.append(0.0)
+    
+    # Calculate metrics
+    metrics = {
+        "mean_iou": np.mean(ious) if ious else 0.0,
+        "median_iou": np.median(ious) if ious else 0.0,
+        "max_iou": np.max(ious) if ious else 0.0,
+        "min_iou": np.min(ious) if ious else 0.0,
+        "detection_rate": successful_detections / total_samples,
+        "samples_evaluated": total_samples,
+        "iou_threshold_0.5": sum(1 for iou in ious if iou > 0.5) / total_samples,
+        "iou_threshold_0.7": sum(1 for iou in ious if iou > 0.7) / total_samples,
+    }
+    
+    return metrics, ious
+
+# Evaluate the fine-tuned model
+print("\nEvaluating fine-tuned model on validation set...")
+metrics_finetuned, ious_finetuned = evaluate_model(
+    model_finetuned, 
+    processor_finetuned, 
+    eval_dataset, 
+    num_samples=50
+)
+
+print("\nFine-tuned Model Evaluation Results:")
+print(f"  Mean IoU: {metrics_finetuned['mean_iou']:.4f}")
+print(f"  Median IoU: {metrics_finetuned['median_iou']:.4f}")
+print(f"  Detection Rate: {metrics_finetuned['detection_rate']:.2%}")
+print(f"  IoU > 0.5: {metrics_finetuned['iou_threshold_0.5']:.2%}")
+print(f"  IoU > 0.7: {metrics_finetuned['iou_threshold_0.7']:.2%}")
+
+# Plot IoU distribution
+plt.figure(figsize=(10, 6))
+plt.hist(ious_finetuned, bins=20, edgecolor='black', alpha=0.7)
+plt.xlabel('IoU Score')
+plt.ylabel('Number of Samples')
+plt.title('Distribution of IoU Scores - Fine-tuned Model')
+plt.axvline(metrics_finetuned['mean_iou'], color='red', linestyle='--', label=f"Mean IoU: {metrics_finetuned['mean_iou']:.3f}")
+plt.axvline(0.5, color='green', linestyle='--', alpha=0.5, label='IoU = 0.5')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
 
 # %% [markdown] id="ATuQ6ZS6eirO" outputId="c3adc0fd-0fdc-4ff4-cc4e-14b4d9039323"
 # Do the same evaluation for the model without finetuning.
+
+# %% id="eval_base_model"
+# Evaluate base model without fine-tuning
+print("\nLoading base model for comparison...")
+base_model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct",
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+    attn_implementation="flash_attention_2",
+)
+base_processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+
+print("\nEvaluating base model (without fine-tuning) on validation set...")
+metrics_base, ious_base = evaluate_model(
+    base_model,
+    base_processor,
+    eval_dataset,
+    num_samples=50
+)
+
+print("\nBase Model Evaluation Results (No Fine-tuning):")
+print(f"  Mean IoU: {metrics_base['mean_iou']:.4f}")
+print(f"  Median IoU: {metrics_base['median_iou']:.4f}")
+print(f"  Detection Rate: {metrics_base['detection_rate']:.2%}")
+print(f"  IoU > 0.5: {metrics_base['iou_threshold_0.5']:.2%}")
+print(f"  IoU > 0.7: {metrics_base['iou_threshold_0.7']:.2%}")
+
+# Compare results
+print("\n" + "="*50)
+print("COMPARISON: Fine-tuned vs Base Model")
+print("="*50)
+print(f"Mean IoU Improvement: {(metrics_finetuned['mean_iou'] - metrics_base['mean_iou']):.4f} "
+      f"({((metrics_finetuned['mean_iou'] - metrics_base['mean_iou']) / max(metrics_base['mean_iou'], 0.001) * 100):.1f}% improvement)")
+print(f"Detection Rate Improvement: {(metrics_finetuned['detection_rate'] - metrics_base['detection_rate']):.2%}")
+print(f"IoU > 0.5 Improvement: {(metrics_finetuned['iou_threshold_0.5'] - metrics_base['iou_threshold_0.5']):.2%}")
+
+# Plot comparison
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# IoU distribution comparison
+axes[0].hist(ious_base, bins=20, alpha=0.5, label='Base Model', edgecolor='black')
+axes[0].hist(ious_finetuned, bins=20, alpha=0.5, label='Fine-tuned Model', edgecolor='black')
+axes[0].set_xlabel('IoU Score')
+axes[0].set_ylabel('Number of Samples')
+axes[0].set_title('IoU Distribution Comparison')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+
+# Metrics comparison bar chart
+metrics_names = ['Mean IoU', 'Detection Rate', 'IoU > 0.5', 'IoU > 0.7']
+base_values = [
+    metrics_base['mean_iou'],
+    metrics_base['detection_rate'],
+    metrics_base['iou_threshold_0.5'],
+    metrics_base['iou_threshold_0.7']
+]
+finetuned_values = [
+    metrics_finetuned['mean_iou'],
+    metrics_finetuned['detection_rate'],
+    metrics_finetuned['iou_threshold_0.5'],
+    metrics_finetuned['iou_threshold_0.7']
+]
+
+x = np.arange(len(metrics_names))
+width = 0.35
+
+axes[1].bar(x - width/2, base_values, width, label='Base Model', alpha=0.8)
+axes[1].bar(x + width/2, finetuned_values, width, label='Fine-tuned Model', alpha=0.8)
+axes[1].set_xlabel('Metrics')
+axes[1].set_ylabel('Score')
+axes[1].set_title('Model Performance Comparison')
+axes[1].set_xticks(x)
+axes[1].set_xticklabels(metrics_names, rotation=45, ha='right')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3, axis='y')
+
+plt.tight_layout()
+plt.show()
+
+# Clean up base model to free memory
+del base_model
+del base_processor
+clear_memory()
 
 # %% [markdown] id="iyhR69T3dfLI"
 # # 🧑‍🍳 [Optional]  The recipe
@@ -849,6 +1451,17 @@ from torchvision import ops
 # Try to export your trained model (with merged LoRA weights) to vLLM and then deploy into Nvidia triton!
 
 # %% id="b3SH27Iu193x"
+# Optional: Merge LoRA weights into base model for deployment
+print("\nMerging LoRA weights into base model for deployment...")
+merged_model = model_finetuned.merge_and_unload()
+
+# Save the merged model
+merged_output_dir = "./qwen2vl-nutrition-detection-merged"
+merged_model.save_pretrained(merged_output_dir)
+processor_finetuned.save_pretrained(merged_output_dir)
+
+print(f"Merged model saved to {merged_output_dir}")
+print("This model can now be loaded without PEFT and used for efficient inference.")
 
 # %% [markdown] id="ejJwH5xpcY6K"
 # ## Bonus
@@ -856,3 +1469,76 @@ from torchvision import ops
 # For Qwen2-VL, implement a custom collate_fn that restricts loss computation to the answer portion only, explicitly excluding the system prompt and question from the loss.
 
 # %% id="JxFyhptrccdr"
+# Bonus: Custom collate function with loss only on answer portion
+def collate_fn_answer_only(batch):
+    """
+    Custom collate function that computes loss only on the assistant's answer,
+    excluding system prompt and user question from loss computation.
+    """
+    messages_list = [sample['messages'] for sample in batch]
+    
+    texts = []
+    images_list = []
+    
+    for messages in messages_list:
+        text = processor.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=False
+        )
+        texts.append(text)
+        
+        image_inputs, video_inputs = process_vision_info(messages)
+        images_list.append(image_inputs)
+    
+    batch_inputs = processor(
+        text=texts,
+        images=images_list,
+        padding=True,
+        truncation=True,
+        max_length=2048,
+        return_tensors="pt"
+    )
+    
+    labels = batch_inputs["input_ids"].clone()
+    
+    # Mask all tokens except assistant's response
+    for i, text in enumerate(texts):
+        # Find the assistant response boundaries
+        # Look for the pattern that indicates start of assistant's actual answer
+        assistant_token = "<|im_start|>assistant"
+        assistant_end_token = "<|im_end|>"
+        
+        # Tokenize the full text to get token positions
+        encoding = processor.tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True
+        )
+        
+        # Find assistant response start and end positions
+        assistant_start_idx = text.find(assistant_token)
+        if assistant_start_idx != -1:
+            # Find the actual content start (after the assistant tag)
+            content_start = assistant_start_idx + len(assistant_token)
+            
+            # Find where assistant response ends
+            assistant_end_idx = text.find(assistant_end_token, content_start)
+            
+            # Convert character positions to token positions
+            offset_mapping = encoding['offset_mapping']
+            
+            # Mask everything before assistant's actual response
+            for j, (start, end) in enumerate(offset_mapping):
+                if start < content_start:
+                    labels[i, j] = -100
+                elif assistant_end_idx != -1 and start >= assistant_end_idx:
+                    labels[i, j] = -100
+    
+    # Also mask padding and special vision tokens
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    
+    batch_inputs["labels"] = labels
+    return batch_inputs
+
+print("Custom collate function for answer-only loss computation created successfully")

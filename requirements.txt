@@ -1,0 +1,32 @@
+# Core dependencies for Qwen2-VL fine-tuning
+torch==2.4.1+cu121
+torchvision==0.19.1+cu121
+torchaudio==2.4.1+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Hugging Face libraries
+git+https://github.com/huggingface/transformers.git
+git+https://github.com/huggingface/trl.git
+datasets==3.0.2
+accelerate==1.0.1
+peft==0.13.2
+
+# Quantization and optimization
+bitsandbytes==0.44.1
+
+# Qwen specific utilities
+qwen-vl-utils==0.0.8
+
+# Experiment tracking
+wandb==0.18.5
+
+# Visualization and utilities
+matplotlib
+IPython
+pillow
+numpy
+tqdm
+
+# Notebook support
+jupytext
+jupyter
