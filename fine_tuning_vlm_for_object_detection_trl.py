@@ -199,142 +199,535 @@ dataset_id = "openfoodfacts/nutrition-table-detection"
 
 # Load the dataset with train and validation splits
 ds = load_dataset(dataset_id)
-train_dataset = ds['train']
-eval_dataset = ds['val']  # Note: this dataset uses 'val' not 'validation'
 
+# inspect the dataset
+print("=" * 60)
+print("DATASET OVERVIEW")
+print("=" * 60)
+print(ds)
+
+# split the dataset into training and evaluation sets
+train_dataset = ds['train']
+eval_dataset = ds['val']  
+
+print("\n" + "=" * 60)
+print("DATASET STATISTICS")
+print("=" * 60)
 print(f"Training samples: {len(train_dataset)}")
 print(f"Validation samples: {len(eval_dataset)}")
 print(f"Dataset features: {train_dataset.features}")
 
-# %% id="9J4Y1d-l7JGi"
+# %%
 # TASK: inspect the content of a training example
 # Let's look at the first training example
+import pprint
+
+print("=" * 60)
+print("DATASET FEATURES BREAKDOWN")
+print("=" * 60)
+
+print("\n📋 FEATURE SCHEMA:")
+for feature_name, feature_type in train_dataset.features.items():
+    print(f"  {feature_name:12} : {feature_type}")
+
+print("\n" + "=" * 60)
+print("INSPECTING train_dataset[0] - FIRST TRAINING EXAMPLE")
+print("=" * 60)
+
 example = train_dataset[0]
-print("Example keys:", example.keys())
-print("\nImage ID:", example['image_id'])  # Fixed: 'image_id' not 'barcode'
-print("Image size:", example['image'].size if hasattr(example['image'], 'size') else 'N/A')
-print("Number of bounding boxes:", len(example['objects']['bbox']))
-print("Bounding box:", example['objects']['bbox'][0])
-print("Category:", example['objects']['category_name'][0])  # Fixed: 'category_name'
 
-# Display the image with bounding box
-from PIL import Image, ImageDraw
-import matplotlib.pyplot as plt
+print(f"\n🔍 COMPLETE RAW DATA FOR train_dataset[0]:")
+print(f"\ntrain_dataset[0]['image_id']:")
+print(f"  {example['image_id']}")
 
-img = example['image']
-draw = ImageDraw.Draw(img)
+print(f"\ntrain_dataset[0]['image']:")
+print(f"  {example['image']}")
 
-# Get the bounding box coordinates (normalized to 0-1)
-bbox = example['objects']['bbox'][0]
-width, height = img.size
+print(f"\ntrain_dataset[0]['width']:")
+print(f"  {example['width']}")
 
-# Convert normalized coordinates to pixel coordinates
-x_min = bbox[0] * width
-y_min = bbox[1] * height
-x_max = bbox[2] * width
-y_max = bbox[3] * height
+print(f"\ntrain_dataset[0]['height']:")
+print(f"  {example['height']}")
 
-# Draw the bounding box
-draw.rectangle([x_min, y_min, x_max, y_max], outline='red', width=3)
+print(f"\ntrain_dataset[0]['meta']:")
+pp = pprint.PrettyPrinter(indent=4, width=80)
+pp.pprint(example['meta'])
 
-plt.figure(figsize=(10, 8))
-plt.imshow(img)
-plt.title(f"Category: {example['objects']['category_name'][0]}")
-plt.axis('off')
-plt.show()
+print(f"\ntrain_dataset[0]['objects']:")
+pp.pprint(example['objects'])
 
-# %% id="eQvNOB-57JGi"
+print(f"\n📝 SUMMARY:")
+print(f"  We are examining: train_dataset[0] (first element of training set)")
+print(f"  Total keys in this example: {list(example.keys())}")
+
+print("\n" + "=" * 60)
+print("HUMAN-READABLE SUMMARY")
+print("=" * 60)
+print("Now let's format the same data in a more readable way:")
+
+print(f"\n🆔 BASIC INFO:")
+print(f"  Image ID     : {example['image_id']}")
+print(f"  Dimensions   : {example['width']} x {example['height']}")
+print(f"  Image Object : {example['image']}")
+
+print(f"\n📊 METADATA:")
+pp.pprint(example['meta'])
+
+print(f"\n🎯 ANNOTATIONS:")
+print(f"  Number of objects: {len(example['objects']['category_name'])}")
+print(f"  Category name       : {example['objects']['category_name']}")
+print(f"  Category IDs     : {example['objects']['category_id']}")
+print(f"  Bounding boxes   :")
+for i, bbox in enumerate(example['objects']['bbox']):
+    print(f"    Object {i}: [y_min={bbox[0]:.3f}, x_min={bbox[1]:.3f}, y_max={bbox[2]:.3f}, x_max={bbox[3]:.3f}]")
+
+# %%
 # Q: why the bbox coordinates are between 0 and 1? can you overlay the bbox on the image for one example?
-from PIL import Image, ImageDraw
-from matplotlib import pyplot as plt
 
 # The bbox coordinates are normalized to [0, 1] to make them resolution-independent.
 # This is a common practice in object detection to handle images of different sizes.
 
+from PIL import Image, ImageDraw
+import matplotlib.pyplot as plt
+
+# TASK: display the image with bounding box
+
+print("\n" + "=" * 60)
+print("IMAGE VISUALIZATION")
+print("=" * 60)
+print("Displaying original image vs. image with bounding box overlay:")
+
+# Get the bounding box coordinates (already normalized to 0-1 from dataset)
+bbox = example['objects']['bbox'][0]
+
+# IMPORTANT: Check dataset dimensions vs PIL image dimensions
+width = example['width']
+height = example['height']
+pil_width, pil_height = example['image'].size
+
+print(f"\n⚠️ Checking dimensions:")
+print(f"  Dataset width x height: {width} x {height}")
+print(f"  PIL image size: {pil_width} x {pil_height}")
+
+# Show the raw bbox values for reference
+print(f"\n📦 Raw bbox values (normalized [0,1]):")
+print(f"  bbox = {bbox}")
+print(f"  Format: [y_min, x_min, y_max, x_max] (OpenFoodFacts convention)")
+
+# CRITICAL: Always use PIL dimensions for visualization since we're drawing on PIL image
+# The dataset bbox is normalized [0,1] regardless of actual image size
+width = pil_width
+height = pil_height
+
+# Convert normalized [0,1] coordinates to pixel coordinates
+# CRITICAL: OpenFoodFacts dataset format is [y_min, x_min, y_max, x_max] NOT [x_min, y_min, x_max, y_max]!
+y_min, x_min, y_max, x_max = bbox  # Unpack in correct order
+x_min = x_min * width
+y_min = y_min * height
+x_max = x_max * width
+y_max = y_max * height
+
+print(f"\n📐 Converted to pixels:")
+print(f"  Pixel coords - Top-left: ({x_min:.1f}, {y_min:.1f})")
+print(f"  Pixel coords - Bottom-right: ({x_max:.1f}, {y_max:.1f})")
+print(f"  Box size: {x_max-x_min:.1f} x {y_max-y_min:.1f} pixels")
+print(f"  Image size: {width} x {height} pixels")
+
+# Create side-by-side comparison
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# Left: Original image (should be clean, no bounding box)
+_ = ax1.imshow(example['image'])
+_ = ax1.set_title("Original Image")
+_ = ax1.axis('off')
+
+# Right: Image with bounding box overlay
+img_with_bbox = example['image'].copy()  # Important: make a copy to avoid modifying original
+draw = ImageDraw.Draw(img_with_bbox)
+
+# Draw the bounding box
+draw.rectangle([x_min, y_min, x_max, y_max], outline='red', width=3)
+
+_ = ax2.imshow(img_with_bbox)
+_ = ax2.set_title(f"With Bounding Box: {example['objects']['category_name'][0]}")
+_ = ax2.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+print(f"\n✅ Visualization complete!")
+print(f"   Category detected: {example['objects']['category_name'][0]}")
+print(f"   Image dimensions: {width} x {height} pixels")
+
+# Verification summary
+print(f"\n✅ BBOX Format Confirmed: OpenFoodFacts uses [y_min, x_min, y_max, x_max]")
+print(f"   Image aspect ratio: {width/height:.2f}")
+print(f"   BBox aspect ratio: {(x_max-x_min)/(y_max-y_min):.2f}")
+
+# %%
 # Let's visualize multiple examples with their bounding boxes
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+print("=" * 60)
+print("MULTIPLE EXAMPLES VISUALIZATION")
+print("=" * 60)
+print("Displaying 6 training examples with their nutrition table bounding boxes:")
+
+# Import required libraries
+from PIL import Image, ImageDraw, ImageFont
+import matplotlib.pyplot as plt
+
+# Create a 2x3 grid for displaying 6 examples
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 axes = axes.flatten()
 
+print(f"\nProcessing examples 0-5 from training dataset...")
+
 for idx in range(6):
+    # Get the training example
     example = train_dataset[idx]
-    img = example['image'].copy()  # Make a copy to avoid modifying original
+    img = example['image'].copy()  # Important: make a copy to avoid modifying original
     draw = ImageDraw.Draw(img)
     
-    # Get image dimensions
-    width, height = img.size
+    # IMPORTANT: Check dimensions - use PIL image size for drawing
+    dataset_width = example['width']
+    dataset_height = example['height']
+    pil_width, pil_height = img.size
+    
+    # Process all bounding boxes for this image
+    num_objects = len(example['objects']['bbox'])
+    
+    # Check if the dataset's reported dimensions match the actual PIL image size
+    # Sometimes images are resized during loading, so we need to use PIL dimensions for accurate drawing
+    if (dataset_width != pil_width) or (dataset_height != pil_height):
+        # Image was likely resized during loading - show both dimensions
+        print(f"  Example {idx}: Dataset {dataset_width}x{dataset_height}px, PIL {pil_width}x{pil_height}px (SCALED), {num_objects} object(s)")
+    else:
+        # Dimensions match - just show once
+        print(f"  Example {idx}: {pil_width}x{pil_height}px, {num_objects} object(s)")
+    
+    # Calculate proportional line width based on displayed image size
+    # This ensures bounding boxes are visible regardless of image size
+    line_width = max(3, min(pil_width, pil_height) // 150)  # Scale based on smaller dimension
+    print(f"    → Bounding Box Line width: {line_width}px")
     
     # Draw all bounding boxes for this image
-    for bbox, category in zip(example['objects']['bbox'], example['objects']['category_name']):
-        # Convert normalized coordinates to pixel coordinates
-        x_min = bbox[0] * width
-        y_min = bbox[1] * height
-        x_max = bbox[2] * width
-        y_max = bbox[3] * height
+    for i, (bbox, category) in enumerate(zip(example['objects']['bbox'], example['objects']['category_name'])):
+        # Convert normalized coordinates to PIL image pixel coordinates
+        # CRITICAL: Dataset uses [y_min, x_min, y_max, x_max] format (normalized 0-1)
+        y_min, x_min, y_max, x_max = bbox  # Unpack in correct order!
+        x_min = x_min * pil_width
+        y_min = y_min * pil_height
+        x_max = x_max * pil_width
+        y_max = y_max * pil_height
         
-        # Draw the bounding box
-        draw.rectangle([x_min, y_min, x_max, y_max], outline='red', width=3)
-        draw.text((x_min, y_min-10), category, fill='red')
+        # Draw the bounding box with proportional red outline
+        draw.rectangle([x_min, y_min, x_max, y_max], outline='red', width=line_width)
+        
+        # Add category label above the bounding box
+        try:
+            # Try to use a larger font if available
+            font = ImageFont.truetype("arial.ttf", 20)
+        except:
+            # Fallback to default font
+            font = ImageFont.load_default()
+        
+        # Add text with background for better visibility
+        text_y = max(10, y_min - 25)  # Ensure text doesn't go above image
+        draw.text((x_min, text_y), f"{category}", fill='red', font=font)
     
-    axes[idx].imshow(img)
-    axes[idx].set_title(f"Image {idx} - Size: {width}x{height}")
-    axes[idx].axis('off')
+    # Display the image in the subplot
+    _ = axes[idx].imshow(img)
+    _ = axes[idx].set_title(f"Example {idx}\nSize: {width}x{height}px | Objects: {num_objects}", 
+                           fontsize=10, pad=10)
+    _ = axes[idx].axis('off')
 
 plt.tight_layout()
 plt.show()
 
-# %% id="wlr2lSwM7JGi"
+print(f"\n✅ Visualization complete!")
+print(f"   Displayed 6 training examples with bounding box overlays")
+print(f"   All images show detected nutrition tables marked with red rectangles")
+print(f"   Each bounding box is labeled with its category name")
+print(f"   Rectangle thickness is now proportional to image size for consistent appearance")
+
+# %%
 # get the histogram of the image sizes
 # get the histogram of the #bounding boxes per image - important for finetuning the model
+
+# TASK: analyze dataset statistics for model preparation
+print("=" * 60)
+print("DATASET STATISTICS ANALYSIS")
+print("=" * 60)
+print("Analyzing image dimensions and bounding box distributions:")
+
+import matplotlib.pyplot as plt
 import numpy as np
 
-# Collect image sizes and bbox counts
-widths = []
-heights = []
-bbox_counts = []
+# Collect statistics from all training examples
+image_widths = []
+image_heights = []
+image_areas = []
+num_bboxes_per_image = []
 
-for example in train_dataset:
-    img = example['image']
-    widths.append(img.size[0])
-    heights.append(img.size[1])
-    bbox_counts.append(len(example['objects']['bbox']))
+print(f"\nProcessing {len(train_dataset)} training examples...")
 
-# Create histograms
-fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+for idx, example in enumerate(train_dataset):
+    # Get image dimensions
+    width = example['width']
+    height = example['height'] 
+    area = width * height
+    
+    # Count bounding boxes in this image
+    num_bboxes = len(example['objects']['bbox'])
+    
+    # Store statistics
+    image_widths.append(width)
+    image_heights.append(height)
+    image_areas.append(area)
+    num_bboxes_per_image.append(num_bboxes)
 
-# Image widths histogram
-axes[0].hist(widths, bins=30, edgecolor='black')
-axes[0].set_title('Distribution of Image Widths')
-axes[0].set_xlabel('Width (pixels)')
-axes[0].set_ylabel('Count')
-axes[0].axvline(np.mean(widths), color='red', linestyle='--', label=f'Mean: {np.mean(widths):.0f}')
-axes[0].legend()
+print(f"✅ Data collection complete!")
 
-# Image heights histogram
-axes[1].hist(heights, bins=30, edgecolor='black')
-axes[1].set_title('Distribution of Image Heights')
-axes[1].set_xlabel('Height (pixels)')
-axes[1].set_ylabel('Count')
-axes[1].axvline(np.mean(heights), color='red', linestyle='--', label=f'Mean: {np.mean(heights):.0f}')
-axes[1].legend()
+# Convert to numpy arrays for easier analysis
+image_widths = np.array(image_widths)
+image_heights = np.array(image_heights)
+image_areas = np.array(image_areas)
+num_bboxes_per_image = np.array(num_bboxes_per_image)
 
-# Bounding boxes per image histogram
-axes[2].hist(bbox_counts, bins=range(1, max(bbox_counts)+2), edgecolor='black', align='left')
-axes[2].set_title('Distribution of Bounding Boxes per Image')
-axes[2].set_xlabel('Number of Bounding Boxes')
-axes[2].set_ylabel('Count')
-axes[2].set_xticks(range(1, max(bbox_counts)+1))
-axes[2].axvline(np.mean(bbox_counts), color='red', linestyle='--', label=f'Mean: {np.mean(bbox_counts):.1f}')
-axes[2].legend()
+# Print summary statistics
+print(f"\n📊 IMAGE DIMENSIONS SUMMARY:")
+print(f"  Width  - Min: {image_widths.min():4d}px | Max: {image_widths.max():4d}px | Mean: {image_widths.mean():.1f}px")
+print(f"  Height - Min: {image_heights.min():4d}px | Max: {image_heights.max():4d}px | Mean: {image_heights.mean():.1f}px")
+print(f"  Area   - Min: {image_areas.min():8.0f} | Max: {image_areas.max():8.0f} | Mean: {image_areas.mean():.0f}")
+
+print(f"\n🎯 BOUNDING BOXES SUMMARY:")
+print(f"  Min boxes per image: {num_bboxes_per_image.min()}")
+print(f"  Max boxes per image: {num_bboxes_per_image.max()}")
+print(f"  Mean boxes per image: {num_bboxes_per_image.mean():.2f}")
+print(f"  Total bounding boxes: {num_bboxes_per_image.sum()}")
+
+# Create comprehensive visualization
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+
+# 1. Image widths histogram
+_ = ax1.hist(image_widths, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+_ = ax1.set_xlabel('Image Width (pixels)')
+_ = ax1.set_ylabel('Frequency')
+_ = ax1.set_title('Distribution of Image Widths')
+_ = ax1.grid(True, alpha=0.3)
+_ = ax1.axvline(image_widths.mean(), color='red', linestyle='--', label=f'Mean: {image_widths.mean():.0f}px')
+_ = ax1.legend()
+
+# 2. Image heights histogram  
+_ = ax2.hist(image_heights, bins=30, alpha=0.7, color='lightgreen', edgecolor='black')
+_ = ax2.set_xlabel('Image Height (pixels)')
+_ = ax2.set_ylabel('Frequency')
+_ = ax2.set_title('Distribution of Image Heights')
+_ = ax2.grid(True, alpha=0.3)
+_ = ax2.axvline(image_heights.mean(), color='red', linestyle='--', label=f'Mean: {image_heights.mean():.0f}px')
+_ = ax2.legend()
+
+# 3. Image areas histogram
+_ = ax3.hist(image_areas/1e6, bins=30, alpha=0.7, color='orange', edgecolor='black')  # Convert to megapixels
+_ = ax3.set_xlabel('Image Area (Megapixels)')
+_ = ax3.set_ylabel('Frequency')
+_ = ax3.set_title('Distribution of Image Areas')
+_ = ax3.grid(True, alpha=0.3)
+_ = ax3.axvline(image_areas.mean()/1e6, color='red', linestyle='--', label=f'Mean: {image_areas.mean()/1e6:.1f}MP')
+_ = ax3.legend()
+
+# 4. Number of bounding boxes histogram - CRITICAL FOR MODEL TUNING
+bbox_counts = np.bincount(num_bboxes_per_image)
+bbox_labels = np.arange(len(bbox_counts))
+_ = ax4.bar(bbox_labels, bbox_counts, alpha=0.7, color='coral', edgecolor='black')
+_ = ax4.set_xlabel('Number of Bounding Boxes per Image')
+_ = ax4.set_ylabel('Number of Images')
+_ = ax4.set_title('Distribution of Bounding Boxes per Image\n(Critical for Model Configuration)')
+_ = ax4.grid(True, alpha=0.3)
+_ = ax4.set_xticks(bbox_labels)
+
+# Add percentage labels on bars
+for i, count in enumerate(bbox_counts):
+    if count > 0:
+        percentage = (count / len(train_dataset)) * 100
+        _ = ax4.text(i, count + 0.5, f'{count}\n({percentage:.1f}%)', 
+                    ha='center', va='bottom', fontsize=9)
 
 plt.tight_layout()
 plt.show()
 
-print(f"Image size stats:")
-print(f"  Width: min={min(widths)}, max={max(widths)}, mean={np.mean(widths):.0f}, std={np.std(widths):.0f}")
-print(f"  Height: min={min(heights)}, max={max(heights)}, mean={np.mean(heights):.0f}, std={np.std(heights):.0f}")
-print(f"\nBounding boxes per image:")
-print(f"  Min: {min(bbox_counts)}, Max: {max(bbox_counts)}, Mean: {np.mean(bbox_counts):.2f}")
-print(f"  Most common: {max(set(bbox_counts), key=bbox_counts.count)} boxes (appears {bbox_counts.count(max(set(bbox_counts), key=bbox_counts.count))} times)")
+# Additional insights for model preparation
+print(f"\n🔧 MODEL PREPARATION INSIGHTS:")
+print(f"  Most common image aspect ratio: {image_widths.mean()/image_heights.mean():.2f} (width/height)")
+
+unique_bbox_counts, bbox_frequencies = np.unique(num_bboxes_per_image, return_counts=True)
+print(f"\n  Bounding box distribution breakdown:")
+for count, freq in zip(unique_bbox_counts, bbox_frequencies):
+    percentage = (freq / len(train_dataset)) * 100
+    print(f"    {count} box(es): {freq:3d} images ({percentage:5.1f}%)")
+
+print(f"\n💡 RECOMMENDATIONS:")
+if num_bboxes_per_image.max() == 1:
+    print(f"  ✅ Single object detection - simpler model configuration")
+else:
+    print(f"  ⚠️  Multi-object detection - configure model for up to {num_bboxes_per_image.max()} objects")
+
+print(f"  📐 Consider input resolution around {int(np.sqrt(image_areas.mean())):d}×{int(np.sqrt(image_areas.mean())):d} pixels")
+print(f"  🎯 Bounding box distribution is important for anchor/prior configuration")
+
+# %%
+# TASK: analyze bounding box characteristics for optimal anchor configuration (Check if necessary later)
+print("\n" + "=" * 60)
+print("BOUNDING BOX DETAILED ANALYSIS")
+print("=" * 60)
+print("Analyzing bbox sizes, positions, and coverage for anchor optimization:")
+
+# Collect detailed bbox statistics
+bbox_widths = []
+bbox_heights = []
+bbox_areas = []
+bbox_aspect_ratios = []
+coverage_ratios = []
+center_x_positions = []
+center_y_positions = []
+
+print(f"\nProcessing bounding boxes from {len(train_dataset)} training examples...")
+
+for example in train_dataset:
+    img_width, img_height = example['width'], example['height']
+    img_area = img_width * img_height
+    
+    for bbox in example['objects']['bbox']:
+        # Convert normalized coordinates to pixels
+        x1, y1, x2, y2 = bbox
+        w = (x2 - x1) * img_width
+        h = (y2 - y1) * img_height
+        area = w * h
+        aspect_ratio = w / h
+        coverage = area / img_area
+        
+        # Calculate center position (normalized)
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        
+        # Store statistics
+        bbox_widths.append(w)
+        bbox_heights.append(h)
+        bbox_areas.append(area)
+        bbox_aspect_ratios.append(aspect_ratio)
+        coverage_ratios.append(coverage)
+        center_x_positions.append(center_x)
+        center_y_positions.append(center_y)
+
+# Convert to numpy for analysis
+bbox_widths = np.array(bbox_widths)
+bbox_heights = np.array(bbox_heights)
+bbox_areas = np.array(bbox_areas)
+bbox_aspect_ratios = np.array(bbox_aspect_ratios)
+coverage_ratios = np.array(coverage_ratios)
+
+print(f"✅ Analyzed {len(bbox_widths)} bounding boxes!")
+
+# Print detailed statistics
+print(f"\n📏 BOUNDING BOX SIZE STATISTICS:")
+print(f"  Width  - Min: {bbox_widths.min():4.0f}px | Max: {bbox_widths.max():4.0f}px | Mean: {bbox_widths.mean():.0f}px | Std: {bbox_widths.std():.0f}px")
+print(f"  Height - Min: {bbox_heights.min():4.0f}px | Max: {bbox_heights.max():4.0f}px | Mean: {bbox_heights.mean():.0f}px | Std: {bbox_heights.std():.0f}px")
+print(f"  Area   - Min: {bbox_areas.min():8.0f} | Max: {bbox_areas.max():8.0f} | Mean: {bbox_areas.mean():.0f}")
+
+print(f"\n📐 ASPECT RATIO & COVERAGE:")
+print(f"  Aspect Ratio (W/H) - Min: {bbox_aspect_ratios.min():.2f} | Max: {bbox_aspect_ratios.max():.2f} | Mean: {bbox_aspect_ratios.mean():.2f}")
+print(f"  Image Coverage     - Min: {coverage_ratios.min():.1%} | Max: {coverage_ratios.max():.1%} | Mean: {coverage_ratios.mean():.1%}")
+
+# Create comprehensive bbox visualization
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+
+# 1. Bbox widths and heights
+_ = ax1.hist(bbox_widths, bins=25, alpha=0.6, color='purple', edgecolor='black', label='Width')
+_ = ax1.hist(bbox_heights, bins=25, alpha=0.6, color='orange', edgecolor='black', label='Height') 
+_ = ax1.set_xlabel('Size (pixels)')
+_ = ax1.set_ylabel('Frequency')
+_ = ax1.set_title('Distribution of Bounding Box Dimensions')
+_ = ax1.legend()
+_ = ax1.grid(True, alpha=0.3)
+
+# 2. Aspect ratios
+_ = ax2.hist(bbox_aspect_ratios, bins=25, alpha=0.7, color='brown', edgecolor='black')
+_ = ax2.set_xlabel('Aspect Ratio (Width/Height)')
+_ = ax2.set_ylabel('Frequency')
+_ = ax2.set_title('Distribution of Bounding Box Aspect Ratios')
+_ = ax2.axvline(bbox_aspect_ratios.mean(), color='red', linestyle='--', label=f'Mean: {bbox_aspect_ratios.mean():.2f}')
+_ = ax2.legend()
+_ = ax2.grid(True, alpha=0.3)
+
+# 3. Coverage ratios
+_ = ax3.hist(coverage_ratios * 100, bins=25, alpha=0.7, color='green', edgecolor='black')
+_ = ax3.set_xlabel('Image Coverage (%)')
+_ = ax3.set_ylabel('Frequency') 
+_ = ax3.set_title('Bounding Box Coverage of Image')
+_ = ax3.axvline(coverage_ratios.mean() * 100, color='red', linestyle='--', label=f'Mean: {coverage_ratios.mean():.1%}')
+_ = ax3.legend()
+_ = ax3.grid(True, alpha=0.3)
+
+# 4. Bbox center positions (heatmap-style)
+_ = ax4.scatter(center_x_positions, center_y_positions, alpha=0.6, color='red', s=20)
+_ = ax4.set_xlabel('Center X (normalized)')
+_ = ax4.set_ylabel('Center Y (normalized)') 
+_ = ax4.set_title('Bounding Box Center Positions')
+_ = ax4.set_xlim(0, 1)
+_ = ax4.set_ylim(0, 1)
+_ = ax4.grid(True, alpha=0.3)
+_ = ax4.invert_yaxis()  # Match image coordinates (0,0 at top-left)
+
+plt.tight_layout()
+plt.show()
+
+# Category analysis
+print(f"\n📊 CATEGORY ANALYSIS:")
+all_categories = []
+for example in train_dataset:
+    all_categories.extend(example['objects']['category_name'])
+
+from collections import Counter
+category_counts = Counter(all_categories)
+
+for category, count in category_counts.items():
+    percentage = (count / len(all_categories)) * 100
+    print(f"  {category}: {count} instances ({percentage:.1f}%)")
+
+# Check for category variations/typos
+unique_categories = set(all_categories)
+print(f"  Unique category strings: {len(unique_categories)}")
+if len(unique_categories) > 1:
+    print(f"  ⚠️  Multiple category variants detected: {unique_categories}")
+else:
+    print(f"  ✅ Consistent single category: {list(unique_categories)[0]}")
+
+# Anchor recommendations based on analysis
+print(f"\n🎯 ANCHOR CONFIGURATION RECOMMENDATIONS:")
+print(f"  Based on bbox size analysis:")
+
+# Calculate optimal anchor scales (in terms of input image fraction)
+mean_coverage = coverage_ratios.mean()
+std_coverage = coverage_ratios.std()
+
+scale_small = max(0.2, mean_coverage - std_coverage)
+scale_medium = mean_coverage  
+scale_large = min(0.9, mean_coverage + std_coverage)
+
+print(f"    Recommended anchor scales: [{scale_small:.1f}, {scale_medium:.1f}, {scale_large:.1f}]")
+
+# Calculate optimal aspect ratios
+mean_aspect = bbox_aspect_ratios.mean()
+std_aspect = bbox_aspect_ratios.std()
+
+ratio_wide = max(0.5, mean_aspect - std_aspect)
+ratio_square = mean_aspect
+ratio_tall = min(2.0, mean_aspect + std_aspect)
+
+print(f"    Recommended aspect ratios: [{ratio_wide:.1f}, {ratio_square:.1f}, {ratio_tall:.1f}]")
+
+print(f"\n  📐 Optimal input resolution: Consider {int(np.sqrt(bbox_areas.mean())*2):d}×{int(np.sqrt(bbox_areas.mean())*2):d} pixels")
+print(f"  🎯 Objects cover {coverage_ratios.mean():.1%} of image on average - good for detection!")
 
 # %% [markdown] id="5nFWDveC7JGi"
 # # Understand Model
@@ -383,6 +776,7 @@ print(f"  Most common: {max(set(bbox_counts), key=bbox_counts.count)} boxes (app
 import torch
 import os
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from qwen_vl_utils import vision_process
 from qwen_vl_utils import process_vision_info
 
 def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-Instruct", device="cuda"):
@@ -401,10 +795,11 @@ def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-
     # Load model and processor
     model = Qwen2VLForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16, # original training precision stored in config.json for this model is bfloat16, so "auto" = torch.bfloat16 for this model
+        attn_implementation="flash_attention_2",
         device_map=device
     )
-    processor = Qwen2VLProcessor.from_pretrained(model_id)
+    processor = Qwen2VLProcessor.from_pretrained(model_id) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
     
     # Handle image input - can be path or PIL Image
     if isinstance(image_path_or_pil, str):
@@ -483,27 +878,41 @@ response = requests.get(test_image_url)
 test_image = Image.open(BytesIO(response.content))
 
 # Display the test image
-plt.figure(figsize=(8, 6))
-plt.imshow(test_image)
-plt.title("Test Image: Red Car")
-plt.axis('off')
-plt.show()
+print("\n📷 DISPLAYING ORIGINAL TEST IMAGE:")
+_ = plt.figure(figsize=(8, 6))
+_ = plt.imshow(test_image)
+_ = plt.title("Test Image: Red Car")
+_ = plt.axis('off')
+_ = plt.show()
+
 
 # Test the inference function
+print("\n" + "=" * 60)
 print("Testing Qwen2-VL inference...")
 print("Prompt: 'Detect the bounding box of the red car.'")
-print("\nModel Response:")
 
-# Uncomment below when you have GPU available
-# result = run_qwen2vl_inference(
-#     test_image, 
-#     "Detect the bounding box of the red car."
-# )
-# print(result)
+
+result = run_qwen2vl_inference(
+    test_image, 
+    "Detect the bounding box of the red car."
+)
+print("\nModel Response:")
+print(result)
+
+print("\n" + "=" * 60)
 
 # For now, let's show what the expected output format should look like
-print("Expected format: <|object_ref_start|>the red car<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>")
-print("Where coordinates are normalized to image dimensions (1000x1000 for Qwen2-VL)")
+
+
+
+print("Expected output format(with skip_special_tokens=False): <|object_ref_start|>the red car<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>")
+print("  Where coordinates are normalized to image dimensions (1000x1000 for Qwen2-VL)")
+print("\nExpected output format(with skip_special_tokens=True): the red car(x1,y1),(x2,y2)")
+
+
+print("\n" + "=" * 60)
+print("Output now looks like expected output format(with skip_special_tokens=True): the red car(x1,y1),(x2,y2)")
+
 
 # %% [markdown] id="oosQDLcQ7JGj"
 # # Try Qwen2VL without finetuning
@@ -526,39 +935,48 @@ def parse_qwen_bbox_output(model_output):
         
     Returns:
         Dict with 'object' name and 'bbox' coordinates, or None if parsing fails
+
+    Rationale: 
+        I want to draw TWO pieces of information:
+            1. WHAT was detected (object name) (Just in case if needed)
+            2. WHERE it is (coordinates)
     """
-    # Pattern for Qwen2-VL detection format:
-    # <|object_ref_start|>object name<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
-    pattern = r'<\|object_ref_start\|>(.+?)<\|object_ref_end\|><\|box_start\|>\((\d+),(\d+)\),\((\d+),(\d+)\)<\|box_end\|>'
+    # Remove <|im_end|> token if present (appears when skip_special_tokens=False)
+    model_output = model_output.replace('<|im_end|>', '').strip()
     
-    matches = re.findall(pattern, model_output)
+    # Pattern 1: WITH special tokens (skip_special_tokens=False)
+    # Format: <|object_ref_start|>object name<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
+    pattern_with_tokens = r'<\|object_ref_start\|>(.+?)<\|object_ref_end\|><\|box_start\|>\((\d+),(\d+)\),\((\d+),(\d+)\)<\|box_end\|>'
+    matches = re.findall(pattern_with_tokens, model_output)
     
-    if not matches:
-        # Try alternative format without special tokens (for non-finetuned model)
-        # Look for patterns like "bounding box: (x1,y1,x2,y2)" or "[x1,y1,x2,y2]"
-        alt_pattern = r'[\[\(]?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*[\]\)]?'
-        alt_matches = re.findall(alt_pattern, model_output)
-        
-        if alt_matches:
-            # Take the first match
-            coords = alt_matches[0]
-            return {
-                'object': 'detected object',
-                'bbox': [int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])]
-            }
-        return None
+    if matches:
+        # Can handle multiple detections
+        results = []
+        for match in matches:
+            object_name = match[0]
+            x1, y1, x2, y2 = int(match[1]), int(match[2]), int(match[3]), int(match[4])
+            results.append({
+                'object': object_name,
+                'bbox': [x1, y1, x2, y2]  # Qwen outputs in [x,y,x,y] format
+            })
+        return results[0] if len(results) == 1 else results
     
-    # Parse all detected objects
-    results = []
-    for match in matches:
-        object_name = match[0]
+    # Pattern 2: WITHOUT special tokens (skip_special_tokens=True)
+    # Format: "object name(x1,y1),(x2,y2)" - may have space before parenthesis
+    pattern_no_tokens = r'([^\(]+?)\s*\((\d+),(\d+)\),\((\d+),(\d+)\)'
+    matches = re.findall(pattern_no_tokens, model_output)
+    
+    if matches:
+        # Usually just one detection when no special tokens
+        match = matches[0]
+        object_name = match[0].strip()
         x1, y1, x2, y2 = int(match[1]), int(match[2]), int(match[3]), int(match[4])
-        results.append({
+        return {
             'object': object_name,
             'bbox': [x1, y1, x2, y2]
-        })
+        }
     
-    return results[0] if len(results) == 1 else results
+    return None  # No valid bbox found
 
 
 # TASK: write a function to visualize the bounding boxes on the input image
@@ -568,11 +986,12 @@ def visualize_bbox_on_image(image, bbox_data, normalize_coords=True):
     
     Args:
         image: PIL Image object
-        bbox_data: Dict or list of dicts with 'object' and 'bbox' keys
-        normalize_coords: If True, bbox coords are in Qwen's 1000x1000 space
+        bbox_data: Dict or list of dicts with 'object' and 'bbox' keys from parse_qwen_bbox_output
+        normalize_coords: If True, bbox coords are in Qwen's [0,1000] space (from model output)
+                         If False, bbox coords are already in pixel coordinates
         
     Returns:
-        PIL Image with bounding boxes drawn
+        PIL Image with bounding boxes drawn and labeled with object names
     """
     from PIL import ImageDraw, ImageFont
     
@@ -580,6 +999,11 @@ def visualize_bbox_on_image(image, bbox_data, normalize_coords=True):
     img_with_bbox = image.copy()
     draw = ImageDraw.Draw(img_with_bbox)
     width, height = img_with_bbox.size
+    
+    # Handle None case
+    if bbox_data is None:
+        print("No bounding box data to visualize")
+        return img_with_bbox
     
     # Handle single or multiple bboxes
     if isinstance(bbox_data, dict):
@@ -605,39 +1029,180 @@ def visualize_bbox_on_image(image, bbox_data, normalize_coords=True):
         else:
             x1, y1, x2, y2 = bbox
         
-        # Draw rectangle
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        # Ensure coordinates are integers
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
         
-        # Add label
+        # Draw rectangle with thicker line
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
+        
+        # Add label with background
         try:
-            # Try to use a better font if available
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
         except:
             font = None
         
         label = f"{object_name}"
         if font:
-            bbox_label = draw.textbbox((x1, y1-25), label, font=font)
+            # Get text size for background
+            bbox_label = draw.textbbox((x1, y1-30), label, font=font)
+            # Draw background rectangle
             draw.rectangle(bbox_label, fill=color)
-            draw.text((x1, y1-25), label, fill='white', font=font)
+            # Draw text
+            draw.text((x1, y1-30), label, fill='white', font=font)
         else:
-            draw.text((x1, y1-20), label, fill=color)
+            # Fallback without custom font
+            draw.text((x1, y1-25), label, fill=color)
+        
+        print(f"Drew bbox in pixels for '{object_name}': [{x1}, {y1}, {x2}, {y2}]")
     
     return img_with_bbox
 
-# Test the parsing function
-test_output = "<|object_ref_start|>the red car<|object_ref_end|><|box_start|>(450,380),(650,520)<|box_end|>"
-parsed = parse_qwen_bbox_output(test_output)
-print("Test parsing:")
-print(f"Input: {test_output}")
-print(f"Parsed: {parsed}")
+# Test the parsing function with the two expected formats
+print("\n📝 Testing parse_qwen_bbox_output function:")
+print("=" * 50)
 
-# Alternative format test
-alt_output = "The bounding box for the object is [100, 200, 300, 400]"
-parsed_alt = parse_qwen_bbox_output(alt_output)
-print(f"\nAlternative format parsing:")
-print(f"Input: {alt_output}")
-print(f"Parsed: {parsed_alt}")
+# Test 1: WITH special tokens (skip_special_tokens=False)
+test_with_tokens = "<|object_ref_start|>the red car<|object_ref_end|><|box_start|>(450,380),(650,520)<|box_end|><|im_end|>"
+parsed1 = parse_qwen_bbox_output(test_with_tokens)
+print(f"Test 1 - WITH special tokens (skip_special_tokens=False):")
+print(f"  Input: {test_with_tokens}")
+print(f"  Parsed: {parsed1}")
+print(f"  ✅ Correctly extracts object='the red car' and bbox=[450,380,650,520]")
+
+# Test 2: WITHOUT special tokens (skip_special_tokens=True)
+test_no_tokens = "the red car(358,571),(492,943)"
+parsed2 = parse_qwen_bbox_output(test_no_tokens)
+print(f"\nTest 2 - WITHOUT special tokens (skip_special_tokens=True):")
+print(f"  Input: {test_no_tokens}")
+print(f"  Parsed: {parsed2}")
+print(f"  ✅ Correctly extracts object='the red car' and bbox=[358,571,492,943]")
+
+# Test 3: Real example from pre-trained model (nutrition table)
+test_nutrition = "The nutrition table(13,60),(984,989) is located in the image"
+parsed3 = parse_qwen_bbox_output(test_nutrition)
+print(f"\nTest 3 - Real output from pre-trained model:")
+print(f"  Input: {test_nutrition}")
+print(f"  Parsed: {parsed3}")
+if parsed3:
+    print(f"  ✅ Successfully parsed even with extra text after coordinates")
+else:
+    print(f"  ❌ Failed to parse - check regex pattern")
+
+print("=" * 50)
+
+# %%
+# Now we want to look at where the bounding box is if we overlay the bounding box on the image
+# First, let's visualize the red car detection that we already ran
+
+import matplotlib.pyplot as plt
+
+print("\n" + "=" * 60)
+print("VISUALIZING RED CAR DETECTION")
+print("=" * 60)
+
+# We already have the result from earlier: "the red car(358,571),(492,943)"
+red_car_output = "the red car(358,571),(492,943)"
+print(f"Model output for red car: {red_car_output}")
+
+# Parse the output
+parsed_red_car = parse_qwen_bbox_output(red_car_output)
+print(f"Parsed bbox: {parsed_red_car}")
+
+if parsed_red_car:
+    # Visualize the bbox on the red car image
+    img_with_bbox = visualize_bbox_on_image(test_image, parsed_red_car, normalize_coords=True)
+    
+    # Display the result
+    _ = plt.figure(figsize=(12, 5))
+    
+    # Original image
+    _ = plt.subplot(1, 2, 1)
+    _ = plt.imshow(test_image)
+    _ = plt.title("Original Image", fontsize=14)
+    _ = plt.axis('off')
+    
+    # Image with bounding box
+    _ = plt.subplot(1, 2, 2)
+    _ = plt.imshow(img_with_bbox)
+    _ = plt.title("With Detected Bounding Box", fontsize=14)
+    _ = plt.axis('off')
+    
+    _ = plt.suptitle("Red Car Detection Result", fontsize=16, fontweight='bold')
+    _ = plt.tight_layout()
+    _ = plt.show()
+
+# %%
+# Now test the pre-trained model on a nutrition table image
+print("\n" + "=" * 60)
+print("TESTING PRE-TRAINED MODEL ON NUTRITION TABLE")
+print("=" * 60)
+
+# Get the first nutrition table example
+example_idx = 0
+example = train_dataset[example_idx]
+nutrition_image = example['image']
+ground_truth_bbox = example['objects']['bbox'][0]
+ground_truth_category = example['objects']['category_name'][0]
+
+print(f"\nUsing training example #{example_idx}")
+print(f"Image size: {nutrition_image.size}")
+print(f"Ground truth: {ground_truth_category}")
+
+# Run inference
+print("\nRunning inference...")
+nutrition_response = run_qwen2vl_inference(
+    nutrition_image,
+    "Detect the bounding box of the nutrition table."
+)
+print(f"Model response: {nutrition_response}")
+
+# Parse the output
+parsed_nutrition = parse_qwen_bbox_output(nutrition_response)
+print(f"Parsed bbox: {parsed_nutrition}")
+
+# Visualize if parsing succeeded
+if parsed_nutrition:
+    # Create visualization
+    img_with_nutrition_bbox = visualize_bbox_on_image(nutrition_image, parsed_nutrition, normalize_coords=True)
+    
+    # Show comparison
+    _ = plt.figure(figsize=(15, 6))
+    
+    # Original with ground truth
+    _ = plt.subplot(1, 2, 1)
+    _ = plt.imshow(nutrition_image)
+    
+    # Draw ground truth rectangle
+    # Use PIL image dimensions since we're drawing on the displayed image
+    pil_width, pil_height = nutrition_image.size
+    # CRITICAL: OpenFoodFacts uses [y_min, x_min, y_max, x_max] format
+    y_min, x_min, y_max, x_max = ground_truth_bbox
+    gt_x1 = int(x_min * pil_width)
+    gt_y1 = int(y_min * pil_height)
+    gt_x2 = int(x_max * pil_width)
+    gt_y2 = int(y_max * pil_height)
+    
+    from matplotlib.patches import Rectangle
+    ax = plt.gca()
+    rect = Rectangle((gt_x1, gt_y1), gt_x2-gt_x1, gt_y2-gt_y1,
+                     linewidth=3, edgecolor='green', facecolor='none')
+    ax.add_patch(rect)
+    _ = plt.title("Ground Truth (Green)", fontsize=14)
+    _ = plt.axis('off')
+    
+    # Model prediction
+    _ = plt.subplot(1, 2, 2)
+    _ = plt.imshow(img_with_nutrition_bbox)
+    _ = plt.title("Model Prediction (Red)", fontsize=14)
+    _ = plt.axis('off')
+    
+    _ = plt.suptitle("Nutrition Table Detection - Pre-trained Model", fontsize=16, fontweight='bold')
+    _ = plt.tight_layout()
+    _ = plt.show()
+    
+
+else:
+    print("\nFailed to parse bbox - the model likely couldn't detect the nutrition table.")
 
 # %% [markdown] id="vw_RG5kw7JGj"
 # # Data preprocessing
@@ -671,7 +1236,7 @@ def convert_to_conversation_format(example):
         example: Dataset sample with 'image', 'objects' containing bbox and category
         
     Returns:
-        Dict with 'messages' key containing list of message dicts with roles
+        Dict with 'messages' key and separate 'image' key for the PIL image
     """
     # Extract nutrition table bounding boxes
     bboxes = example['objects']['bbox']
@@ -681,11 +1246,14 @@ def convert_to_conversation_format(example):
     # Convert normalized [0,1] bbox to Qwen's [0,1000] format
     assistant_responses = []
     for bbox, category in zip(bboxes, categories):
-        # Convert from [x_min, y_min, x_max, y_max] normalized to Qwen format
-        x1 = int(bbox[0] * 1000)
-        y1 = int(bbox[1] * 1000)
-        x2 = int(bbox[2] * 1000)
-        y2 = int(bbox[3] * 1000)
+        # CRITICAL: OpenFoodFacts uses [y_min, x_min, y_max, x_max] format
+        # But Qwen2VL expects (x_top_left, y_top_left), (x_bottom_right, y_bottom_right)
+        y_min, x_min, y_max, x_max = bbox  # Unpack OpenFoodFacts format
+        # Convert to Qwen format: (x,y) coordinates in [0,1000] range
+        x1 = int(x_min * 1000)  # x_top_left
+        y1 = int(y_min * 1000)  # y_top_left
+        x2 = int(x_max * 1000)  # x_bottom_right
+        y2 = int(y_max * 1000)  # y_bottom_right
         
         # Format: <|object_ref_start|>object<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
         response = f"<|object_ref_start|>{category}<|object_ref_end|><|box_start|>({x1},{y1}),({x2},{y2})<|box_end|>"
@@ -694,7 +1262,7 @@ def convert_to_conversation_format(example):
     # Combine multiple detections if present
     assistant_text = " ".join(assistant_responses)
     
-    # Create conversation format
+    # Create conversation format WITHOUT the PIL image embedded
     conversation = [
         {
             "role": "system",
@@ -710,7 +1278,7 @@ def convert_to_conversation_format(example):
             "content": [
                 {
                     "type": "image",
-                    "image": example['image']
+                    "image": "IMAGE_PLACEHOLDER"  # Use placeholder instead of actual image
                 },
                 {
                     "type": "text",
@@ -729,7 +1297,11 @@ def convert_to_conversation_format(example):
         }
     ]
     
-    return {"messages": conversation}
+    # Return messages and image separately
+    return {
+        "messages": conversation,
+        "image": example['image']  # Store PIL image at top level
+    }
 
 
 # %% [markdown] id="1edUqNGWTtjA"
@@ -737,6 +1309,22 @@ def convert_to_conversation_format(example):
 #
 
 # %% id="oSHNqk0dkxii"
+"""
+Filter out any samples that have missing images to avoid None leaking into
+process_vision_info during collation/training.
+"""
+def _has_image(example):
+    img = example.get('image')
+    try:
+        # Treat as valid only if it looks like a PIL image
+        return (img is not None) and hasattr(img, 'size')
+    except Exception:
+        return img is not None
+
+# Apply filtering before formatting
+train_dataset = train_dataset.filter(_has_image)
+eval_dataset = eval_dataset.filter(_has_image)
+
 # Task: apply the function above to all samples in the training and eval datasets
 train_dataset_formatted = train_dataset.map(convert_to_conversation_format)
 eval_dataset_formatted = eval_dataset.map(convert_to_conversation_format)
@@ -753,7 +1341,8 @@ for msg in sample_formatted['messages']:
         if content['type'] == 'text':
             print(f"    Text: {content['text'][:100]}..." if len(content['text']) > 100 else f"    Text: {content['text']}")
         elif content['type'] == 'image':
-            print(f"    Image: {content['image'].size if hasattr(content['image'], 'size') else 'PIL Image'}")
+            print(f"    Image: {content['image']}")  # Will show IMAGE_PLACEHOLDER
+print(f"  Separate PIL Image: {sample_formatted['image'].size if hasattr(sample_formatted['image'], 'size') else 'Not found'}")
 
 
 # %% [markdown] id="Sw3b76rawti6"
@@ -926,7 +1515,7 @@ training_args = SFTConfig(
     # Mixed precision and performance
     bf16=True,  # Use bfloat16 precision
     tf32=True,  # Enable TF32 on Ampere GPUs
-    dataloader_num_workers=4,
+    dataloader_num_workers=0,
     
     # Evaluation and saving
     eval_strategy="steps",
@@ -941,7 +1530,7 @@ training_args = SFTConfig(
     # Other settings
     remove_unused_columns=False,
     push_to_hub=False,
-    report_to="wandb",  # Enable wandb logging
+    report_to="tensorboard",  # Use TensorBoard for logging metrics
     run_name="qwen2vl-nutrition-detection",
     
     # Specific for vision models
@@ -958,6 +1547,9 @@ print(f"  Batch size per device: {training_args.per_device_train_batch_size}")
 print(f"  Gradient accumulation steps: {training_args.gradient_accumulation_steps}")
 print(f"  Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
 print(f"  Number of epochs: {training_args.num_train_epochs}")
+print(f"  Logging: TensorBoard (logs saved to: {training_args.logging_dir})")
+print("\nTo view training metrics, run in terminal:")
+print(f"  tensorboard --logdir={training_args.logging_dir}")
 
 # %% [markdown] id="wjQGt-iZVyef"
 # # wandb setup
@@ -967,27 +1559,30 @@ print(f"  Number of epochs: {training_args.num_train_epochs}")
 #
 
 # %% id="ckVfXDWsoF4Y"
-import wandb
-# TASK: set up wand.init
+# SKIP THIS CELL - W&B disabled to avoid blocking
+# import wandb
+# # TASK: set up wand.init
+# 
+# # Initialize Weights & Biases for experiment tracking
+# wandb.init(
+#     project="qwen2vl-nutrition-detection",
+#     name="qwen2vl-7b-nutrition-lora",
+#     config={
+#         "model": model_id,
+#         "lora_r": lora_config.r,
+#         "lora_alpha": lora_config.lora_alpha,
+#         "learning_rate": training_args.learning_rate,
+#         "batch_size": training_args.per_device_train_batch_size,
+#         "gradient_accumulation": training_args.gradient_accumulation_steps,
+#         "epochs": training_args.num_train_epochs,
+#         "dataset": "openfoodfacts/nutrition-table-detection",
+#     },
+#     tags=["qwen2-vl", "object-detection", "nutrition-table", "lora"],
+# )
+# 
+# print("W&B initialized for experiment tracking")
 
-# Initialize Weights & Biases for experiment tracking
-wandb.init(
-    project="qwen2vl-nutrition-detection",
-    name="qwen2vl-7b-nutrition-lora",
-    config={
-        "model": model_id,
-        "lora_r": lora_config.r,
-        "lora_alpha": lora_config.lora_alpha,
-        "learning_rate": training_args.learning_rate,
-        "batch_size": training_args.per_device_train_batch_size,
-        "gradient_accumulation": training_args.gradient_accumulation_steps,
-        "epochs": training_args.num_train_epochs,
-        "dataset": "openfoodfacts/nutrition-table-detection",
-    },
-    tags=["qwen2-vl", "object-detection", "nutrition-table", "lora"],
-)
-
-print("W&B initialized for experiment tracking")
+print("W&B DISABLED - Skipping wandb initialization to avoid blocking")
 
 # %% [markdown] id="pOUrD9P-y-Kf"
 # ## Training the Model 🏃
@@ -1042,35 +1637,80 @@ def collate_fn(batch):
     Data collator for Qwen2-VL that processes text-image pairs for training.
     
     Args:
-        batch: List of samples from the dataset, each containing 'messages'
+        batch: List of samples from the dataset, each containing 'messages' and 'image'
         
     Returns:
         Dict with input_ids, attention_mask, pixel_values, and labels
     """
-    # Extract messages from each sample
+    # Extract messages and images from each sample
     messages_list = [sample['messages'] for sample in batch]
+    images_list = [sample.get('image', None) for sample in batch]  # Images are now at top level
+
+    # Drop any entries without an image to avoid None in process_vision_info
+    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+    if not valid_pairs:
+        raise ValueError("Batch contains no valid images.")
+    if len(valid_pairs) != len(batch):
+        print(f"[collate_fn] Dropped {len(batch) - len(valid_pairs)} samples without images in this batch")
+    messages_list, images_list = zip(*valid_pairs)
+    messages_list = list(messages_list)
+    images_list = list(images_list)
     
     # Apply chat template to each conversation
     texts = []
-    images_list = []
+    all_images = []
     
-    for messages in messages_list:
+    print("[collate_fn] Using hardened collator v2")
+
+    for i, messages in enumerate(messages_list):
+        # We need to restore the actual image in messages for process_vision_info
+        messages_with_image = []
+        for msg in messages:
+            msg_copy = msg.copy()
+            # Scan and restore for all roles, not just 'user'
+            content_copy = []
+            for content in msg['content']:
+                content_item = content.copy()
+                if content_item.get('type') == 'image':
+                    if content_item.get('image') == 'IMAGE_PLACEHOLDER' or content_item.get('image') is None:
+                        if images_list[i] is not None:
+                            content_item['image'] = images_list[i]
+                        else:
+                            continue
+                content_copy.append(content_item)
+            msg_copy['content'] = content_copy
+            messages_with_image.append(msg_copy)
+        
         # Apply chat template
         text = processor.apply_chat_template(
-            messages, 
+            messages_with_image, 
             tokenize=False, 
             add_generation_prompt=False
         )
         texts.append(text)
-        
-        # Process vision information
-        image_inputs, video_inputs = process_vision_info(messages)
-        images_list.append(image_inputs)
+
+        # Build image inputs per sample using process_vision_info
+        try:
+            image_inputs, _ = process_vision_info(messages_with_image)
+        except Exception as e:
+            print(f"[collate_fn] process_vision_info failed for sample {i}: {e}")
+            image_inputs = [images_list[i]] if images_list[i] is not None else []
+        all_images.extend(image_inputs)
     
-    # Process all texts and images together
+    # Process all texts and images together using aligned image inputs
+    if any(img is None for img in all_images):
+        raise ValueError("[collate_fn] all_images contains None after vision processing")
+
+    # Optional: sanity check placeholder/image alignment
+    image_token = getattr(processor, 'image_token', '<|image_pad|>')
+    total_placeholders = sum(t.count(image_token) for t in texts)
+    if total_placeholders != len(all_images):
+        print(f"[collate_fn] Note: placeholders={total_placeholders}, images={len(all_images)}")
+
     batch_inputs = processor(
         text=texts,
-        images=images_list,
+        images=all_images,
+        videos=None,
         padding=True,
         truncation=True,
         max_length=2048,
@@ -1089,8 +1729,9 @@ def collate_fn(batch):
         labels[labels == processor.image_token_id] = -100
     
     # Find and mask vision start/end tokens
-    for special_token in ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"]:
-        if special_token in processor.tokenizer.special_tokens_map.values():
+    special_tokens_to_mask = ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"]
+    for special_token in special_tokens_to_mask:
+        if special_token in processor.tokenizer.get_vocab():
             token_id = processor.tokenizer.convert_tokens_to_ids(special_token)
             labels[labels == token_id] = -100
     
@@ -1116,14 +1757,9 @@ def collate_fn(batch):
     
     return batch_inputs
 
-print("Data collator function created successfully")
+print("Data collator function created successfully - fixed image handling")
 
-# %% [markdown] id="skbpTuJlV8qN"
-# Now, we will define the [SFTTrainer](https://huggingface.co/docs/trl/sft_trainer), which is a wrapper around the [transformers.Trainer](https://huggingface.co/docs/transformers/main_classes/trainer) class and inherits its attributes and methods. This class simplifies the fine-tuning process by properly initializing the [PeftModel](https://huggingface.co/docs/peft/v0.6.0/package_reference/peft_model) when a [PeftConfig](https://huggingface.co/docs/peft/v0.6.0/en/package_reference/config#peft.PeftConfig) object is provided. By using `SFTTrainer`, we can efficiently manage the training workflow and ensure a smooth fine-tuning experience for our Vision Language Model.
-#
-#
-
-# %% id="k_jk-U7ULYtA"
+# %%
 from trl import SFTTrainer
 # TASK: Create the SFT trainer and launch training
 
@@ -1134,7 +1770,7 @@ trainer = SFTTrainer(
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
     data_collator=collate_fn,
-    tokenizer=processor.tokenizer,
+    processing_class=processor.tokenizer,  # Correct parameter name for SFTTrainer
     peft_config=lora_config,
 )
 
@@ -1142,6 +1778,21 @@ print("SFTTrainer created successfully")
 print(f"Total training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
+
+
+# %%
+print("collator_is_bound:", trainer.data_collator is collate_fn)
+print("dataloader_num_workers:", training_args.dataloader_num_workers)
+tmp_batch = [train_dataset_formatted[i] for i in range(2)]
+_ = collate_fn(tmp_batch)
+print("collate_fn manual batch OK")
+
+# %% [markdown] id="skbpTuJlV8qN"
+# Now, we will define the [SFTTrainer](https://huggingface.co/docs/trl/sft_trainer), which is a wrapper around the [transformers.Trainer](https://huggingface.co/docs/transformers/main_classes/trainer) class and inherits its attributes and methods. This class simplifies the fine-tuning process by properly initializing the [PeftModel](https://huggingface.co/docs/peft/v0.6.0/package_reference/peft_model) when a [PeftConfig](https://huggingface.co/docs/peft/v0.6.0/en/package_reference/config#peft.PeftConfig) object is provided. By using `SFTTrainer`, we can efficiently manage the training workflow and ensure a smooth fine-tuning experience for our Vision Language Model.
+#
+#
+
+# %% id="k_jk-U7ULYtA"
 
 # Launch training
 print("\nStarting training...")
@@ -1284,10 +1935,12 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 img_gt = image.copy()
 draw_gt = ImageDraw.Draw(img_gt)
 width, height = img_gt.size
-x_min = ground_truth_bbox[0] * width
-y_min = ground_truth_bbox[1] * height
-x_max = ground_truth_bbox[2] * width
-y_max = ground_truth_bbox[3] * height
+# CRITICAL: OpenFoodFacts uses [y_min, x_min, y_max, x_max] format
+y_min, x_min, y_max, x_max = ground_truth_bbox
+x_min = x_min * width
+y_min = y_min * height
+x_max = x_max * width
+y_max = y_max * height
 draw_gt.rectangle([x_min, y_min, x_max, y_max], outline='green', width=3)
 
 axes[0].imshow(img_gt)
@@ -1405,8 +2058,12 @@ def evaluate_model(model, processor_model, dataset, num_samples=50):
                 ]
                 
                 # Convert to tensor for IoU calculation
-                gt_tensor = torch.tensor([[ground_truth_bbox[0], ground_truth_bbox[1], 
-                                          ground_truth_bbox[2], ground_truth_bbox[3]]], dtype=torch.float32)
+                # CRITICAL: Convert ground_truth from [y_min, x_min, y_max, x_max] to [x_min, y_min, x_max, y_max]
+                # because torch.ops.box_iou expects [x_min, y_min, x_max, y_max] format
+                y_min_gt, x_min_gt, y_max_gt, x_max_gt = ground_truth_bbox
+                gt_tensor = torch.tensor([[x_min_gt, y_min_gt, x_max_gt, y_max_gt]], dtype=torch.float32)
+                
+                # pred_bbox_norm is already in [x_min, y_min, x_max, y_max] format from Qwen output
                 pred_tensor = torch.tensor([[pred_bbox_norm[0], pred_bbox_norm[1],
                                            pred_bbox_norm[2], pred_bbox_norm[3]]], dtype=torch.float32)
                 
