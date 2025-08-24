@@ -1232,24 +1232,43 @@ def convert_to_conversation_format(example):
     """
     Convert a dataset example to Qwen2-VL conversation format.
     
+    Why IMAGE_PLACEHOLDER?
+    - HuggingFace dataset.map() needs serializable data (PIL images aren't)
+    - The placeholder is replaced with the actual image during training (in collate_fn)
+    - Image is stored separately at example['image'] to avoid duplication
+    
+    Coordinate Conversion:
+    - Input: OpenFoodFacts [y_min, x_min, y_max, x_max] in [0,1]
+    - Output: Qwen2-VL (x1,y1),(x2,y2) in [0,1000)
+    
     Args:
-        example: Dataset sample with 'image', 'objects' containing bbox and category
+        example: Dataset sample with 'image' and 'objects' fields
         
     Returns:
-        Dict with 'messages' key and separate 'image' key for the PIL image
+        Dict with 'messages' (conversation) and 'image' (PIL object)
     """
+    # Validate input
+    if 'objects' not in example or 'bbox' not in example['objects']:
+        raise ValueError("Missing objects or bbox in example")
+    
     # Extract nutrition table bounding boxes
     bboxes = example['objects']['bbox']
     categories = example['objects']['category_name']  # Fixed: 'category_name' not 'category'
     
     # Format the assistant response with Qwen2-VL special tokens
-    # Convert normalized [0,1] bbox to Qwen's [0,1000] format
+    # Convert normalized [0,1] bbox to Qwen's [0,1000) format
     assistant_responses = []
     for bbox, category in zip(bboxes, categories):
+        # Validate bbox values are in [0,1] range (with small tolerance for rounding)
+        if not all(-0.001 <= coord <= 1.001 for coord in bbox):
+            print(f"Warning: bbox coordinates out of [0,1] range: {bbox}")
+        
         # CRITICAL: OpenFoodFacts uses [y_min, x_min, y_max, x_max] format
         # But Qwen2VL expects (x_top_left, y_top_left), (x_bottom_right, y_bottom_right)
         y_min, x_min, y_max, x_max = bbox  # Unpack OpenFoodFacts format
-        # Convert to Qwen format: (x,y) coordinates in [0,1000] range
+        
+        # Convert to Qwen format: (x,y) coordinates in [0,1000) range
+        # Note: multiply by 1000 to convert from [0,1] to [0,1000)
         x1 = int(x_min * 1000)  # x_top_left
         y1 = int(y_min * 1000)  # y_top_left
         x2 = int(x_max * 1000)  # x_bottom_right
@@ -1309,11 +1328,25 @@ def convert_to_conversation_format(example):
 #
 
 # %% id="oSHNqk0dkxii"
-"""
-Filter out any samples that have missing images to avoid None leaking into
-process_vision_info during collation/training.
-"""
 def _has_image(example):
+    """
+    Filter out samples with missing or invalid images.
+    
+    This function is crucial for preventing None values from leaking into
+    process_vision_info during collation/training, which would cause crashes.
+    
+    Why this is necessary:
+    - Some dataset samples may have corrupted or missing images
+    - PIL Image loading can fail silently, leaving None values
+    - The collate_fn and process_vision_info expect valid PIL images
+    - Filtering ensures training stability and prevents runtime errors
+    
+    Args:
+        example: Dataset sample that should contain an 'image' field
+    
+    Returns:
+        bool: True if example has a valid PIL image with 'size' attribute
+    """
     img = example.get('image')
     try:
         # Treat as valid only if it looks like a PIL image
@@ -1332,17 +1365,63 @@ eval_dataset_formatted = eval_dataset.map(convert_to_conversation_format)
 print(f"Formatted training samples: {len(train_dataset_formatted)}")
 print(f"Formatted evaluation samples: {len(eval_dataset_formatted)}")
 
-# Check a sample
-sample_formatted = train_dataset_formatted[0]
-print("\nSample formatted message structure:")
-for msg in sample_formatted['messages']:
-    print(f"  Role: {msg['role']}")
-    for content in msg['content']:
-        if content['type'] == 'text':
-            print(f"    Text: {content['text'][:100]}..." if len(content['text']) > 100 else f"    Text: {content['text']}")
-        elif content['type'] == 'image':
-            print(f"    Image: {content['image']}")  # Will show IMAGE_PLACEHOLDER
-print(f"  Separate PIL Image: {sample_formatted['image'].size if hasattr(sample_formatted['image'], 'size') else 'Not found'}")
+# Simple check - just print what convert_to_conversation_format produces
+print("\n" + "="*60)
+print("Sample 0 after conversion:")
+print("="*60)
+sample = convert_to_conversation_format(train_dataset[0])
+print(sample)
+
+print("\n" + "="*60)
+print("Sample 1 after conversion:")
+print("="*60)
+sample2 = convert_to_conversation_format(train_dataset[1])
+print(sample2)
+
+# %%
+# Display the same samples with better formatting (line breaks)
+from pprint import pprint
+
+print("\n" + "="*60)
+print("Sample 0 - Better formatted")
+print("="*60)
+print()
+pprint(sample)
+
+print("\n" + "="*60)
+print("Sample 1 - Better formatted")
+print("="*60)
+print()
+pprint(sample2)
+
+# %%
+# Show what happens after apply_chat_template
+print("\n" + "="*60)
+print("After apply_chat_template")
+print("="*60)
+
+# Load processor to apply chat template
+from transformers import Qwen2VLProcessor
+processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+
+# Apply chat template to sample 0
+text_sample0 = processor.apply_chat_template(
+    sample['messages'], 
+    tokenize=False, 
+    add_generation_prompt=False  # False for training
+)
+print("\nSample 0 after apply_chat_template:")
+print(text_sample0)
+
+# Apply chat template to sample 1
+text_sample1 = processor.apply_chat_template(
+    sample2['messages'],
+    tokenize=False,
+    add_generation_prompt=False
+)
+print("\n" + "="*60)
+print("\nSample 1 after apply_chat_template:")
+print(text_sample1)
 
 
 # %% [markdown] id="Sw3b76rawti6"
@@ -1425,6 +1504,12 @@ print(f"Model loaded: {model_id}")
 print(f"Model device map: {model.hf_device_map}")
 print(f"Model memory footprint: {model.get_memory_footprint() / 1024**3:.2f} GB")
 
+# %%
+# IMPORTANT: For TRL version 0.12.0, we need to manually prepare the model before LoRA
+# Newer versions (0.21+) do this automatically, but 0.12.0 does not
+from peft import prepare_model_for_kbit_training
+model = prepare_model_for_kbit_training(model)
+print("✅ Model prepared for k-bit training")
 
 # %% [markdown] id="65wfO29isQlX"
 # ## Set Up QLoRA and SFTConfig 🚀
@@ -1474,6 +1559,11 @@ print(f"  Rank (r): {lora_config.r}")
 print(f"  Alpha: {lora_config.lora_alpha}")
 print(f"  Dropout: {lora_config.lora_dropout}")
 print(f"  Target modules: {lora_config.target_modules}")
+
+# For TRL 0.12.0, we need to manually apply get_peft_model
+model = get_peft_model(model, lora_config)
+print("\n✅ LoRA adapters attached to model")
+model.print_trainable_parameters()
 
 # %% [markdown] id="A1t7Hk_f7JGn"
 # Next, you need to create an SFT config for model finetuning. This step is critical for model convergence.
@@ -1532,10 +1622,13 @@ training_args = SFTConfig(
     push_to_hub=False,
     report_to="tensorboard",  # Use TensorBoard for logging metrics
     run_name="qwen2vl-nutrition-detection",
+    seed=42,  # For reproducibility
     
     # Specific for vision models
-    dataset_text_field="",  # We'll use a custom data collator
-    max_length=2048,  # Fixed: 'max_length' not 'max_seq_length'
+    dataset_text_field="",  # Empty string because we use custom data_collator, not "messages"
+    # Note: dataset_text_field would be "messages" if we wanted SFTTrainer to handle text extraction,
+    # but we handle everything in our custom collate_fn, so we leave it empty
+    max_length=2048,
     dataset_kwargs={
         "skip_prepare_dataset": True  # We handle data preparation ourselves
     },
@@ -1547,6 +1640,7 @@ print(f"  Batch size per device: {training_args.per_device_train_batch_size}")
 print(f"  Gradient accumulation steps: {training_args.gradient_accumulation_steps}")
 print(f"  Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
 print(f"  Number of epochs: {training_args.num_train_epochs}")
+print(f"  Random seed: {training_args.seed}")
 print(f"  Logging: TensorBoard (logs saved to: {training_args.logging_dir})")
 print("\nTo view training metrics, run in terminal:")
 print(f"  tensorboard --logdir={training_args.logging_dir}")
@@ -1764,14 +1858,18 @@ from trl import SFTTrainer
 # TASK: Create the SFT trainer and launch training
 
 # Create the trainer
+# For TRL 0.12.0: We already manually:
+# 1. Called prepare_model_for_kbit_training()
+# 2. Applied get_peft_model() with LoRA config
+# So we DON'T pass peft_config to SFTTrainer (model is already a PEFT model)
 trainer = SFTTrainer(
-    model=model,
+    model=model,  # Already a PEFT model with LoRA adapters
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
     data_collator=collate_fn,
-    processing_class=processor.tokenizer,  # Correct parameter name for SFTTrainer
-    peft_config=lora_config,
+    processing_class=processor.tokenizer,  # Tokenizer for SFTTrainer
+    # Note: NO peft_config here since we already applied get_peft_model manually
 )
 
 print("SFTTrainer created successfully")
