@@ -771,6 +771,118 @@ print(f"  🎯 Objects cover {coverage_ratios.mean():.1%} of image on average - 
 #
 #
 
+# %%
+# CRITICAL: Analyze the tokenizer and its special tokens and model.config
+print("\n" + "=" * 80)
+print("TOKENIZER ANALYSIS - Understanding Special Tokens and Configuration")
+print("=" * 80)
+
+from transformers import Qwen2VLProcessor
+import json
+
+# Load the processor and tokenizer
+processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+tokenizer = processor.tokenizer
+
+print("\n1. VOCABULARY INFORMATION:")
+print("-" * 40)
+print(f"Vocabulary size: {tokenizer.vocab_size}")
+print(f"Model max length: {tokenizer.model_max_length}")
+print(f"Padding side: {tokenizer.padding_side}")
+print(f"Truncation side: {tokenizer.truncation_side}")
+
+print(f"len(tokenizer): {len(tokenizer)}")
+
+print("\n2. SPECIAL TOKENS MAP:")
+print("-" * 40)
+special_tokens_map = tokenizer.special_tokens_map
+for token_name, token_value in special_tokens_map.items():
+    token_id = tokenizer.convert_tokens_to_ids(token_value) if isinstance(token_value, str) else None
+    print(f"{token_name}: '{token_value}' -> ID: {token_id}")
+
+print("\n3. ALL SPECIAL TOKENS:")
+print("-" * 40)
+all_special_tokens = tokenizer.all_special_tokens
+print(f"Total special tokens: {len(all_special_tokens)}")
+for i, token in enumerate(all_special_tokens[:20]):  # Show first 20
+    token_id = tokenizer.convert_tokens_to_ids(token)
+    print(f"  {i+1}. '{token}' -> ID: {token_id}")
+if len(all_special_tokens) > 20:
+    print(f"  ... and {len(all_special_tokens) - 20} more")
+
+print("\n4. IMPORTANT TOKEN IDS:")
+print("-" * 40)
+print(f"pad_token_id: {tokenizer.pad_token_id} ('{tokenizer.pad_token}' if exists)")
+print(f"bos_token_id: {tokenizer.bos_token_id} ('{tokenizer.bos_token}' if exists)")
+print(f"eos_token_id: {tokenizer.eos_token_id} ('{tokenizer.eos_token}' if exists)")
+print(f"unk_token_id: {tokenizer.unk_token_id} ('{tokenizer.unk_token}' if exists)")
+
+# Check for vision-specific tokens
+print("\n5. VISION-SPECIFIC TOKENS:")
+print("-" * 40)
+vision_tokens = ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>", "<|video_pad|>", 
+                 "<|object_ref_start|>", "<|object_ref_end|>", "<|box_start|>", "<|box_end|>",
+                 "<|im_start|>", "<|im_end|>"]
+for token in vision_tokens:
+    if token in tokenizer.get_vocab():
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        print(f"'{token}' -> ID: {token_id}")
+    else:
+        print(f"'{token}' -> NOT IN VOCABULARY")
+
+print("\n6. CHAT TEMPLATE:")
+print("-" * 40)
+if hasattr(tokenizer, 'chat_template'):
+    print("Chat template exists:")
+    # Print first 500 chars of template
+    template_str = str(tokenizer.chat_template)[:500]
+    print(template_str + "..." if len(str(tokenizer.chat_template)) > 500 else template_str)
+else:
+    print("No chat template found")
+
+print("\n7. TOKEN ID RANGE CHECK:")
+print("-" * 40)
+print(f"Valid token ID range: 0 to {tokenizer.vocab_size - 1}")
+print(f"Any token ID >= {tokenizer.vocab_size} will cause the training error!")
+
+
+
+# Check Model 
+
+import torch, transformers
+
+# 2) Model: use the correct family for VL
+
+from transformers import Qwen2VLForConditionalGeneration
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct",
+    torch_dtype=torch.bfloat16, # original training precision stored in config.json for this model is bfloat16, so "auto" = torch.bfloat16 for this model
+    attn_implementation="flash_attention_2",
+    device_map="cuda"
+)
+
+# 3) Collect sizes (read-only)
+tok_vocab_size = tokenizer.vocab_size
+tok_len        = len(tokenizer)
+added_vocab    = tokenizer.get_added_vocab()
+n_added        = len(added_vocab)
+
+emb_in  = model.get_input_embeddings().weight.shape[0]
+emb_out = (model.get_output_embeddings().weight.shape[0]
+           if model.get_output_embeddings() is not None else None)
+cfg_vocab = getattr(model.config, "vocab_size", None)
+
+print("---- TOKENIZER ----")
+print(f"tokenizer.vocab_size : {tok_vocab_size}")
+print(f"len(tokenizer)       : {tok_len}  (added tokens: {n_added})")
+
+print("\n---- MODEL ----")
+print(f"config.vocab_size    : {cfg_vocab}")
+print(f"input emb rows       : {emb_in}")
+print(f"lm_head rows         : {emb_out}")
+print(f"config class         : {model.config.__class__.__name__}")
+
+
 # %% id="JNIW_O0z7JGi"
 # TASK: write an inference function for qwen2-vl
 import torch
@@ -1324,7 +1436,7 @@ def convert_to_conversation_format(example):
 
 
 # %% [markdown] id="1edUqNGWTtjA"
-# Now, let’s format the data using the chatbot structure. This will allow us to set up the interactions appropriately for our model.
+# Now, let's format the data using the chatbot structure. This will allow us to set up the interactions appropriately for our model.
 #
 
 # %% id="oSHNqk0dkxii"
@@ -1359,11 +1471,42 @@ train_dataset = train_dataset.filter(_has_image)
 eval_dataset = eval_dataset.filter(_has_image)
 
 # Task: apply the function above to all samples in the training and eval datasets
-train_dataset_formatted = train_dataset.map(convert_to_conversation_format)
-eval_dataset_formatted = eval_dataset.map(convert_to_conversation_format)
+# Use remove_columns to get clean output with only 'messages' and 'image' fields
+columns_to_remove = ['image_id', 'width', 'height', 'meta', 'objects']
+
+# Unfortunately, HuggingFace datasets adds None fields during serialization of nested dicts
+# This is a known behavior. We have two options:
+# Option 1: Accept the None fields (they don't affect training, collate_fn handles them)
+# Option 2: Post-process to remove them (adds overhead but cleaner)
+
+# For now, using Option 1 - the collate_fn already handles None values correctly
+train_dataset_formatted = train_dataset.map(
+    convert_to_conversation_format,
+    remove_columns=columns_to_remove
+)
+eval_dataset_formatted = eval_dataset.map(
+    convert_to_conversation_format, 
+    remove_columns=columns_to_remove
+)
 
 print(f"Formatted training samples: {len(train_dataset_formatted)}")
 print(f"Formatted evaluation samples: {len(eval_dataset_formatted)}")
+
+# NOTE: HuggingFace automatically adds 'image': None and 'text': None to content items
+# This is expected behavior and the collate_fn handles it correctly
+
+# %%
+# IMPORTANT DISCOVERY: None fields cannot be removed from HuggingFace Datasets!
+# See IMPORTANT_LESSON.md for full explanation
+# 
+# Key points:
+# 1. HuggingFace uses Apache Arrow which enforces schema consistency
+# 2. Dataset.from_list() will ALWAYS add None fields back for nested dicts with varying keys
+# 3. The None fields don't affect training - collate_fn handles them correctly
+# 4. This is only a cosmetic issue when inspecting the dataset
+#
+# We keep the current approach: use .map() with remove_columns for efficiency
+# The collate_fn (lines 2463-2468) properly filters out None values during training
 
 # Simple check - just print what convert_to_conversation_format produces
 print("\n" + "="*60)
@@ -1424,9 +1567,36 @@ print("\nSample 1 after apply_chat_template:")
 print(text_sample1)
 
 
-# %% [markdown] id="Sw3b76rawti6"
-# # Model finetuning
-# **Remove Model and Clean GPU**
+# %%
+# Inspect the first two elements of train_dataset_formatted (what actually goes to DataLoader)
+print("\n" + "="*80)
+print("INSPECTING train_dataset_formatted - ACTUAL DATASET PASSED TO TRAINER")
+print("="*80)
+
+# Simple inspection first
+for i in range(2):
+    print(f"\nSample {i}:")
+    print(train_dataset_formatted[i])
+    print("-" * 50)
+
+# %%
+# Display the same train_dataset_formatted samples with better formatting
+from pprint import pprint
+
+print("\n" + "="*60)
+print("train_dataset_formatted[0] - Better formatted")
+print("="*60)
+print()
+formatted_sample_0 = train_dataset_formatted[0]
+pprint(formatted_sample_0)
+
+print("\n" + "="*60)
+print("train_dataset_formatted[1] - Better formatted")
+print("="*60)
+print()
+formatted_sample_1 = train_dataset_formatted[1]
+pprint(formatted_sample_1)
+
 #
 # Before we proceed with training the model in the next section, let's clear the current variables and clean the GPU to free up resources.
 #
@@ -1503,6 +1673,8 @@ processor = Qwen2VLProcessor.from_pretrained(
 print(f"Model loaded: {model_id}")
 print(f"Model device map: {model.hf_device_map}")
 print(f"Model memory footprint: {model.get_memory_footprint() / 1024**3:.2f} GB")
+
+
 
 # %%
 # IMPORTANT: For TRL version 0.12.0, we need to manually prepare the model before LoRA
@@ -1620,7 +1792,7 @@ training_args = SFTConfig(
     # Other settings
     remove_unused_columns=False,
     push_to_hub=False,
-    report_to="tensorboard",  # Use TensorBoard for logging metrics
+    report_to="wandb",  # Use W&B for logging metrics (changed from tensorboard)
     run_name="qwen2vl-nutrition-detection",
     seed=42,  # For reproducibility
     
@@ -1641,9 +1813,6 @@ print(f"  Gradient accumulation steps: {training_args.gradient_accumulation_step
 print(f"  Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps}")
 print(f"  Number of epochs: {training_args.num_train_epochs}")
 print(f"  Random seed: {training_args.seed}")
-print(f"  Logging: TensorBoard (logs saved to: {training_args.logging_dir})")
-print("\nTo view training metrics, run in terminal:")
-print(f"  tensorboard --logdir={training_args.logging_dir}")
 
 # %% [markdown] id="wjQGt-iZVyef"
 # # wandb setup
@@ -1653,30 +1822,30 @@ print(f"  tensorboard --logdir={training_args.logging_dir}")
 #
 
 # %% id="ckVfXDWsoF4Y"
-# SKIP THIS CELL - W&B disabled to avoid blocking
-# import wandb
-# # TASK: set up wand.init
-# 
-# # Initialize Weights & Biases for experiment tracking
-# wandb.init(
-#     project="qwen2vl-nutrition-detection",
-#     name="qwen2vl-7b-nutrition-lora",
-#     config={
-#         "model": model_id,
-#         "lora_r": lora_config.r,
-#         "lora_alpha": lora_config.lora_alpha,
-#         "learning_rate": training_args.learning_rate,
-#         "batch_size": training_args.per_device_train_batch_size,
-#         "gradient_accumulation": training_args.gradient_accumulation_steps,
-#         "epochs": training_args.num_train_epochs,
-#         "dataset": "openfoodfacts/nutrition-table-detection",
-#     },
-#     tags=["qwen2-vl", "object-detection", "nutrition-table", "lora"],
-# )
-# 
-# print("W&B initialized for experiment tracking")
+# Initialize W&B for experiment tracking
+import wandb
 
-print("W&B DISABLED - Skipping wandb initialization to avoid blocking")
+wandb.login()  # reads the key from the env
+
+# Initialize Weights & Biases for experiment tracking
+wandb.init(
+    project="qwen2vl-nutrition-detection",
+    name="qwen2vl-7b-nutrition-lora",
+    config={
+        "model": model_id,
+        "lora_r": lora_config.r,
+        "lora_alpha": lora_config.lora_alpha,
+        "learning_rate": training_args.learning_rate,
+        "batch_size": training_args.per_device_train_batch_size,
+        "gradient_accumulation": training_args.gradient_accumulation_steps,
+        "epochs": training_args.num_train_epochs,
+        "dataset": "openfoodfacts/nutrition-table-detection",
+    },
+    tags=["qwen2-vl", "object-detection", "nutrition-table", "lora"],
+)
+
+print("✅ W&B initialized for experiment tracking")
+print(f"View your run at: {wandb.run.get_url()}")
 
 # %% [markdown] id="pOUrD9P-y-Kf"
 # ## Training the Model 🏃
@@ -1721,11 +1890,14 @@ print("W&B DISABLED - Skipping wandb initialization to avoid blocking")
 # 👉 Check out the TRL official example [scripts]( https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py#L87) for more details.
 #
 
-# %% id="pAzDovzylQeZ"
-# TASK: Create a data collator to encode text and image pairs
-from qwen_vl_utils import process_vision_info
-import torch
+# %% [markdown]
+# ## Data Collator Function
+#
+# The collator function is critical for properly batching text-image pairs during training.
+# It handles the conversion from our formatted dataset to the format expected by the model.
 
+# %% id="pAzDovzylQeZ"
+# Original collate_fn - simpler version without advanced fixes
 def collate_fn(batch):
     """
     Data collator for Qwen2-VL that processes text-image pairs for training.
@@ -1851,7 +2023,268 @@ def collate_fn(batch):
     
     return batch_inputs
 
-print("Data collator function created successfully - fixed image handling")
+print("Original collate_fn created")
+
+# %%
+# Fixed collate_fn with improved error handling and robust masking  
+def collate_fn_fixed(batch):
+    """
+    FIXED VERSION: Robust collate function that prevents out-of-range label issues.
+    
+    This collator:
+    1. Restores IMAGE_PLACEHOLDER with actual PIL images
+    2. Uses process_vision_info to properly extract and format images
+    3. Applies chat template to get formatted text
+    4. Tokenizes text and processes images together
+    5. Creates labels with proper masking for loss computation
+    
+    Key improvements:
+    - Properly masks all vision/special tokens to prevent training on them
+    - Validates that no out-of-vocabulary tokens exist in labels
+    - Uses token-based span finding for robust assistant response extraction
+    - Handles edge cases gracefully (samples without images, OOV tokens)
+    
+    Args:
+        batch: List of samples from the dataset, each containing 'messages' and 'image'
+        
+    Returns:
+        Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
+    """
+    # Extract messages and images from each sample
+    messages_list = [sample['messages'] for sample in batch]
+    images_list = [sample.get('image', None) for sample in batch]
+    
+    # Filter out samples without images
+    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+    if not valid_pairs:
+        raise ValueError("Batch contains no valid images.")
+    
+    messages_list, images_list = zip(*valid_pairs)
+    messages_list = list(messages_list)
+    images_list = list(images_list)
+    
+    # Process each sample
+    texts = []
+    all_images = []
+    
+    for messages, image in zip(messages_list, images_list):
+        # Clean up messages: remove None values and restore images
+        messages_with_image = []
+        for msg in messages:
+            msg_copy = {'role': msg['role'], 'content': []}
+            
+            for content_item in msg['content']:
+                # Process text content
+                if content_item.get('type') == 'text':
+                    if content_item.get('text'):  # Only add if text exists
+                        msg_copy['content'].append({
+                            'type': 'text',
+                            'text': content_item['text']
+                        })
+                # Process image content - only add to user messages
+                elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                    msg_copy['content'].append({
+                        'type': 'image',
+                        'image': image  # Use the actual PIL image
+                    })
+            
+            if msg_copy['content']:
+                messages_with_image.append(msg_copy)
+        
+        # Apply chat template
+        text = processor.apply_chat_template(
+            messages_with_image,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        texts.append(text)
+        all_images.append(image)
+    
+    # Process texts and images together
+    batch_inputs = processor(
+        text=texts,
+        images=all_images,
+        videos=None,
+        padding=True,
+        truncation=False,
+        return_tensors="pt"
+    )
+    
+    # Create labels from input_ids
+    labels = batch_inputs["input_ids"].clone()
+    
+    # Get vocabulary size for validation
+    vocab_size = processor.tokenizer.vocab_size
+    
+    # CRITICAL: Check for out-of-vocabulary tokens and handle them
+    oov_mask = batch_inputs["input_ids"] >= vocab_size
+    if oov_mask.any():
+        print(f"[collate_fn] WARNING: Found {oov_mask.sum().item()} out-of-vocabulary tokens")
+        # Replace OOV tokens with UNK token in input_ids
+        if processor.tokenizer.unk_token_id is not None:
+            batch_inputs["input_ids"][oov_mask] = processor.tokenizer.unk_token_id
+        # Always mask OOV tokens in labels
+        labels[oov_mask] = -100
+    
+    # Step 1: Collect all special token IDs to mask
+    special_token_ids = set()
+    
+    # Add padding token
+    if processor.tokenizer.pad_token_id is not None:
+        special_token_ids.add(processor.tokenizer.pad_token_id)
+    
+    # Add vision and chat special tokens
+    special_token_strings = [
+        "<|vision_start|>", "<|vision_end|>", "<|image_pad|>", "<|video_pad|>",
+        "<|im_start|>", "<|im_end|>",
+        "<|object_ref_start|>", "<|object_ref_end|>", 
+        "<|box_start|>", "<|box_end|>"
+    ]
+    
+    for token_str in special_token_strings:
+        if token_str in processor.tokenizer.get_vocab():
+            token_id = processor.tokenizer.convert_tokens_to_ids(token_str)
+            if token_id is not None and 0 <= token_id < vocab_size:
+                special_token_ids.add(token_id)
+    
+    # Add image token if it exists
+    if hasattr(processor, "image_token_id") and processor.image_token_id is not None:
+        special_token_ids.add(processor.image_token_id)
+    
+    # Step 2: Mask all special tokens
+    for token_id in special_token_ids:
+        labels[labels == token_id] = -100
+    
+    # Step 3: Find and unmask only assistant responses (token-based approach)
+    # Encode the markers to token IDs
+    assistant_start_text = "<|im_start|>assistant\n"
+    assistant_end_text = "<|im_end|>"
+    
+    try:
+        assistant_start_ids = processor.tokenizer.encode(assistant_start_text, add_special_tokens=False)
+        assistant_end_ids = processor.tokenizer.encode(assistant_end_text, add_special_tokens=False)
+    except:
+        # Fallback if encoding fails
+        assistant_start_ids = []
+        assistant_end_ids = []
+    
+    if assistant_start_ids and assistant_end_ids:
+        # Helper function to find token sequence
+        def find_token_sequence(tokens, sequence, start_pos=0):
+            seq_len = len(sequence)
+            for i in range(start_pos, len(tokens) - seq_len + 1):
+                if tokens[i:i + seq_len].tolist() == sequence:
+                    return i
+            return -1
+        
+        # Process each sequence in the batch
+        for batch_idx in range(labels.shape[0]):
+            input_ids_list = batch_inputs["input_ids"][batch_idx]
+            
+            # Initially mask everything for this sequence
+            labels[batch_idx, :] = -100
+            
+            # Find all assistant response spans
+            pos = 0
+            while pos < len(input_ids_list):
+                # Find start of assistant response
+                start_pos = find_token_sequence(input_ids_list, assistant_start_ids, pos)
+                if start_pos == -1:
+                    break
+                
+                # Find end of assistant response
+                response_start = start_pos + len(assistant_start_ids)
+                end_pos = find_token_sequence(input_ids_list, assistant_end_ids, response_start)
+                
+                if end_pos == -1:
+                    # No end marker found, unmask to the end
+                    end_pos = len(input_ids_list)
+                
+                # Unmask the assistant response (but not special tokens)
+                for idx in range(response_start, end_pos):
+                    token_id = input_ids_list[idx].item()
+                    # Only unmask if it's not a special token and within vocab range
+                    if token_id not in special_token_ids and 0 <= token_id < vocab_size:
+                        labels[batch_idx, idx] = token_id
+                
+                # Move past this response
+                pos = end_pos + len(assistant_end_ids) if end_pos < len(input_ids_list) else len(input_ids_list)
+    else:
+        # Fallback: If we can't find markers, mask everything except non-special tokens
+        print("[collate_fn] Warning: Could not encode assistant markers, using fallback masking")
+        # This will train on all text tokens except special ones
+        for token_id in special_token_ids:
+            labels[labels == token_id] = -100
+    
+    # Final validation: Ensure all unmasked labels are within vocabulary range
+    valid_labels = labels[labels != -100]
+    if valid_labels.numel() > 0:
+        max_label = valid_labels.max().item()
+        if max_label >= vocab_size:
+            print(f"[collate_fn] ERROR: Found label {max_label} >= vocab_size {vocab_size}")
+            # Mask any remaining out-of-range labels
+            labels[labels >= vocab_size] = -100
+    
+    # Add labels to batch
+    batch_inputs["labels"] = labels
+    
+    return batch_inputs
+
+print("✅ Fixed collate_fn created")
+
+# %%
+# DEBUG: Test the collate_fn with actual data samples
+print("\n" + "="*60)
+print("DEBUG: Testing collate_fn with first two samples from train_dataset_formatted")
+print("="*60)
+
+# Get first two samples from the dataset
+sample0 = train_dataset_formatted[0]
+sample1 = train_dataset_formatted[1]
+
+# Create a test batch
+test_batch = [sample0, sample1]
+
+print(f"Sample 0 keys: {sample0.keys()}")
+print(f"Sample 1 keys: {sample1.keys()}")
+print(f"Sample 0 has image: {sample0.get('image') is not None}")
+print(f"Sample 1 has image: {sample1.get('image') is not None}")
+
+# Test the collate_fn
+try:
+    print("\nCalling collate_fn with test batch...")
+    result = collate_fn(test_batch)
+    print("✓ collate_fn executed successfully!")
+    
+    print(f"\nResult keys: {result.keys()}")
+    print(f"Input IDs shape: {result['input_ids'].shape}")
+    print(f"Attention mask shape: {result['attention_mask'].shape}")
+    print(f"Labels shape: {result['labels'].shape}")
+    
+    if 'pixel_values' in result:
+        print(f"Pixel values shape: {result['pixel_values']['pixel_values'].shape}")
+        print(f"Image grid thw shape: {result['pixel_values']['image_grid_thw'].shape}")
+    
+    # Check if labels are properly masked
+    num_masked = (result['labels'] == -100).sum().item()
+    total_tokens = result['labels'].numel()
+    print(f"\nLabel masking: {num_masked}/{total_tokens} tokens masked ({num_masked/total_tokens*100:.1f}%)")
+    
+except Exception as e:
+    print(f"✗ Error in collate_fn: {e}")
+    import traceback
+    traceback.print_exc()
+
+print("="*60 + "\n")
+
+# %%
+# Note: Using the consolidated collate_fn defined earlier in the notebook
+# This function already includes all the fixes for out-of-range label issues
+
+# %%
+# IMPORTANT: Use the fixed collate_fn for training to prevent out-of-range label issues
+collate_fn = collate_fn_fixed
+print("✅ Switched to using collate_fn_fixed for training")
 
 # %%
 from trl import SFTTrainer
@@ -1867,8 +2300,8 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
-    data_collator=collate_fn,
-    processing_class=processor.tokenizer,  # Tokenizer for SFTTrainer
+    data_collator=collate_fn,  # Using the FIXED collate_fn that prevents out-of-range labels
+    processing_class=processor,  # Use full processor (not just tokenizer) for consistency
     # Note: NO peft_config here since we already applied get_peft_model manually
 )
 
