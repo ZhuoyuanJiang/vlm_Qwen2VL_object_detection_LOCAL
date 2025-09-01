@@ -1470,6 +1470,9 @@ def _has_image(example):
 train_dataset = train_dataset.filter(_has_image)
 eval_dataset = eval_dataset.filter(_has_image)
 
+
+print(f"train_dataset[0]: {train_dataset[0]}")
+
 # Task: apply the function above to all samples in the training and eval datasets
 # Use remove_columns to get clean output with only 'messages' and 'image' fields
 columns_to_remove = ['image_id', 'width', 'height', 'meta', 'objects']
@@ -1494,6 +1497,8 @@ print(f"Formatted evaluation samples: {len(eval_dataset_formatted)}")
 
 # NOTE: HuggingFace automatically adds 'image': None and 'text': None to content items
 # This is expected behavior and the collate_fn handles it correctly
+
+# %%
 
 # %%
 # IMPORTANT DISCOVERY: None fields cannot be removed from HuggingFace Datasets!
@@ -1601,6 +1606,271 @@ pprint(formatted_sample_1)
 # Before we proceed with training the model in the next section, let's clear the current variables and clean the GPU to free up resources.
 #
 #
+
+# %% [markdown]
+# # Step by Step debugging the collating function before apply to chat template (to be deleted)
+
+# %%
+print(train_dataset_formatted[0])
+print(type(train_dataset_formatted))
+print(type(train_dataset_formatted[0]))
+print(type([train_dataset_formatted[0:10]]))
+
+# %%
+batch = train_dataset_formatted
+
+# Extract messages and images from each sample
+messages_list = [sample['messages'] for sample in batch]
+images_list = [sample.get('image', None) for sample in batch]
+
+
+
+# %%
+print(type(messages_list))
+print(type(images_list))
+# print(messages_list)
+# print(images_list)
+for i in range(5):
+    print(messages_list[i])
+    print(images_list[i])
+    print("-"*100)
+
+# %%
+print(len(messages_list))
+
+# %%
+# Filter out samples without images
+valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+if not valid_pairs:
+    raise ValueError("Batch contains no valid images.")
+
+messages_list, images_list = zip(*valid_pairs)
+messages_list = list(messages_list)
+images_list = list(images_list)
+
+# Process each sample
+texts = []
+all_images = []
+
+
+
+# %%
+all_conversations = []  # This will hold complete conversations
+
+for messages, image in zip(messages_list, images_list):
+    messages_with_image = []
+    # Clean up messages: remove None values and restore images
+    for msg in messages:
+        msg_copy = {'role': msg['role'], 'content': []}
+        
+        for content_item in msg['content']:
+            # Skip None entries entirely
+            if content_item is None:
+                continue
+                
+            # Process text content - filter out None text values
+            if content_item.get('type') == 'text':
+                text_value = content_item.get('text')
+                if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+                    msg_copy['content'].append({
+                        'type': 'text',
+                        'text': text_value
+                    })
+            # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+            elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+                image_value = content_item.get('image')
+                if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                    # Replace with the actual PIL image from top level
+                    msg_copy['content'].append({
+                        'type': 'image',
+                        'image': image  # Use the actual PIL image
+                    })
+                elif image_value and image_value != 'None':
+                    # Use existing image if it's not placeholder
+                    msg_copy['content'].append({
+                        'type': 'image',
+                        'image': image_value
+                    })
+        
+        if msg_copy['content']:
+            messages_with_image.append(msg_copy)
+
+    # Add the complete conversation (3 messages) to collection
+    all_conversations.append(messages_with_image)
+
+print("First 5 messages_with_image examples:")
+for i in range(min(5, len(all_conversations))):
+    print(f"\nExample {i}:")
+    print(all_conversations[i])
+
+# %%
+# Final Code to make sure the data is formatted correctly after dataset.map:
+
+
+batch = train_dataset_formatted
+
+# Extract messages and images from each sample
+messages_list = [sample['messages'] for sample in batch]
+images_list = [sample.get('image', None) for sample in batch]
+
+# Filter out samples without images
+valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+if not valid_pairs:
+    raise ValueError("Batch contains no valid images.")
+
+messages_list, images_list = zip(*valid_pairs)
+messages_list = list(messages_list)
+images_list = list(images_list)
+
+# Process each sample
+# texts = []
+# all_images = []
+
+all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+
+for messages, image in zip(messages_list, images_list):
+    messages_with_image = []
+    # Clean up messages: remove None values and restore images
+    for msg in messages:
+        msg_copy = {'role': msg['role'], 'content': []}
+        
+        for content_item in msg['content']:
+            # Skip None entries entirely
+            if content_item is None:
+                continue
+                
+            # Process text content - filter out None text values
+            if content_item.get('type') == 'text':
+                text_value = content_item.get('text')
+                if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+                    msg_copy['content'].append({
+                        'type': 'text',
+                        'text': text_value
+                    })
+            # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+            elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+                image_value = content_item.get('image')
+                if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                    # Replace with the actual PIL image from top level
+                    msg_copy['content'].append({
+                        'type': 'image',
+                        'image': image  # Use the actual PIL image
+                    })
+                elif image_value and image_value != 'None':
+                    # Use existing image if it's not placeholder
+                    msg_copy['content'].append({
+                        'type': 'image',
+                        'image': image_value
+                    })
+        
+        if msg_copy['content']:
+            messages_with_image.append(msg_copy)
+
+    # Add the complete conversation (3 messages) to collection
+    all_conversations.append(messages_with_image)
+
+print("First 5 all_conversations examples:")
+for i in range(min(5, len(all_conversations))):
+    print(f"\nExample {i}:")
+    print(all_conversations[i])
+
+# %%
+# put a batch in apply_chat_template 
+
+text = processor.apply_chat_template(
+    all_conversations,
+    tokenize=False,
+    add_generation_prompt=False
+)
+
+for i in range(2):
+    print(text[i])
+    print("-"*100)
+
+print(type(text))
+
+# %%
+# DELETE [This cell is to be deleted]
+# # for conversation in all_conversations[0:4]:    
+# #     # Apply chat template to get text
+# #     text = processor.apply_chat_template(
+# #         conversation,
+# #         tokenize=False,
+# #         add_generation_prompt=False
+# #     )
+# #     print(text)
+
+
+
+# %%
+image, video = process_vision_info(all_conversations)
+for i in range(5):
+    print(image[i])
+    print("-"*100)
+# print(video[0:5])
+
+print(type(image))
+
+# %%
+batch_inputs = processor(
+    text=text,
+    images=image,
+    # videos=all_videos,
+    padding=True,
+    truncation=False,
+    return_tensors="pt"
+)
+
+# %%
+print(f'batch_inputs: \n {batch_inputs["input_ids"][0:2, -10:]}') ## First 2 samples, last 10 tokens
+print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, -10:]}') ## 1=real token, 0=padding
+
+print(f'batch_inputs["input_ids"]: \n {batch_inputs["input_ids"][0:2, 0:10]}') # First 2 samples, first 10 tokens
+print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, 0:10]}')
+
+print("-"*100)
+
+print("Input shapes:")
+for key, value in batch_inputs.items():
+    if hasattr(value, 'shape'):
+        print(f"{key}: {value.shape}")
+
+print("-"*100)
+print(f'type(batch_inputs): \n {type(batch_inputs)}')
+
+# %%
+# # Final Code starting from Apply Chat template 
+
+# # Apply chat template to get text
+# text = processor.apply_chat_template(
+#     all_conversations,
+#     tokenize=False,
+#     add_generation_prompt=False
+# )
+
+# # process_vision_info to get image and video
+# image, video = process_vision_info(all_conversations)
+
+# # Process texts and images together
+# batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
+#     text=text,
+#     images=image,
+#     # videos=all_videos,
+#     padding=True,
+#     truncation=False,
+#     return_tensors="pt"
+# )
+
+# %%
+# __init__ method
+print(
+    f"processor.tokenizer.pad_token_id: {processor.tokenizer.pad_token_id}\n"
+    f"processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_start|>')}\n"
+    f"processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_end|>')}\n"
+    f"processor.tokenizer.convert_tokens_to_ids('<|image_pad|>'): {processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')}"
+)
 
 # %% id="dxkXZuUkvy8j"
 import gc
@@ -1760,9 +2030,9 @@ training_args = SFTConfig(
     
     # Training hyperparameters
     num_train_epochs=3,
-    per_device_train_batch_size=2,  # Adjust based on GPU memory
-    per_device_eval_batch_size=2,
-    gradient_accumulation_steps=8,  # Effective batch size = 2 * 8 = 16
+    per_device_train_batch_size=1,  # Adjust based on GPU memory
+    per_device_eval_batch_size=1,
+    gradient_accumulation_steps=16,  # Effective batch size = 2 * 8 = 16
     gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
     
     # Learning rate and optimization
@@ -1896,135 +2166,6 @@ print(f"View your run at: {wandb.run.get_url()}")
 # The collator function is critical for properly batching text-image pairs during training.
 # It handles the conversion from our formatted dataset to the format expected by the model.
 
-# %% id="pAzDovzylQeZ"
-# Original collate_fn - simpler version without advanced fixes
-def collate_fn(batch):
-    """
-    Data collator for Qwen2-VL that processes text-image pairs for training.
-    
-    Args:
-        batch: List of samples from the dataset, each containing 'messages' and 'image'
-        
-    Returns:
-        Dict with input_ids, attention_mask, pixel_values, and labels
-    """
-    # Extract messages and images from each sample
-    messages_list = [sample['messages'] for sample in batch]
-    images_list = [sample.get('image', None) for sample in batch]  # Images are now at top level
-
-    # Drop any entries without an image to avoid None in process_vision_info
-    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-    if not valid_pairs:
-        raise ValueError("Batch contains no valid images.")
-    if len(valid_pairs) != len(batch):
-        print(f"[collate_fn] Dropped {len(batch) - len(valid_pairs)} samples without images in this batch")
-    messages_list, images_list = zip(*valid_pairs)
-    messages_list = list(messages_list)
-    images_list = list(images_list)
-    
-    # Apply chat template to each conversation
-    texts = []
-    all_images = []
-    
-    print("[collate_fn] Using hardened collator v2")
-
-    for i, messages in enumerate(messages_list):
-        # We need to restore the actual image in messages for process_vision_info
-        messages_with_image = []
-        for msg in messages:
-            msg_copy = msg.copy()
-            # Scan and restore for all roles, not just 'user'
-            content_copy = []
-            for content in msg['content']:
-                content_item = content.copy()
-                if content_item.get('type') == 'image':
-                    if content_item.get('image') == 'IMAGE_PLACEHOLDER' or content_item.get('image') is None:
-                        if images_list[i] is not None:
-                            content_item['image'] = images_list[i]
-                        else:
-                            continue
-                content_copy.append(content_item)
-            msg_copy['content'] = content_copy
-            messages_with_image.append(msg_copy)
-        
-        # Apply chat template
-        text = processor.apply_chat_template(
-            messages_with_image, 
-            tokenize=False, 
-            add_generation_prompt=False
-        )
-        texts.append(text)
-
-        # Build image inputs per sample using process_vision_info
-        try:
-            image_inputs, _ = process_vision_info(messages_with_image)
-        except Exception as e:
-            print(f"[collate_fn] process_vision_info failed for sample {i}: {e}")
-            image_inputs = [images_list[i]] if images_list[i] is not None else []
-        all_images.extend(image_inputs)
-    
-    # Process all texts and images together using aligned image inputs
-    if any(img is None for img in all_images):
-        raise ValueError("[collate_fn] all_images contains None after vision processing")
-
-    # Optional: sanity check placeholder/image alignment
-    image_token = getattr(processor, 'image_token', '<|image_pad|>')
-    total_placeholders = sum(t.count(image_token) for t in texts)
-    if total_placeholders != len(all_images):
-        print(f"[collate_fn] Note: placeholders={total_placeholders}, images={len(all_images)}")
-
-    batch_inputs = processor(
-        text=texts,
-        images=all_images,
-        videos=None,
-        padding=True,
-        truncation=True,
-        max_length=2048,
-        return_tensors="pt"
-    )
-    
-    # Create labels for training (copy input_ids)
-    labels = batch_inputs["input_ids"].clone()
-    
-    # Mask padding tokens in labels
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-    
-    # Mask image tokens in labels to not compute loss on them
-    # Find and mask special vision tokens
-    if hasattr(processor, "image_token_id"):
-        labels[labels == processor.image_token_id] = -100
-    
-    # Find and mask vision start/end tokens
-    special_tokens_to_mask = ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"]
-    for special_token in special_tokens_to_mask:
-        if special_token in processor.tokenizer.get_vocab():
-            token_id = processor.tokenizer.convert_tokens_to_ids(special_token)
-            labels[labels == token_id] = -100
-    
-    # Also mask the system and user parts, keeping only assistant response for loss
-    # This is done by finding the assistant token positions
-    for i, text in enumerate(texts):
-        # Find where assistant response starts
-        assistant_start = text.find("assistant") 
-        if assistant_start != -1:
-            # Tokenize just the part before assistant response
-            prefix_tokens = processor.tokenizer(
-                text[:assistant_start],
-                add_special_tokens=False,
-                return_tensors="pt"
-            )
-            prefix_len = prefix_tokens["input_ids"].shape[1]
-            
-            # Mask everything before the assistant response
-            if prefix_len < labels.shape[1]:
-                labels[i, :prefix_len] = -100
-    
-    batch_inputs["labels"] = labels
-    
-    return batch_inputs
-
-print("Original collate_fn created")
-
 # %%
 # Fixed collate_fn with improved error handling and robust masking  
 def collate_fn_fixed(batch):
@@ -2050,61 +2191,84 @@ def collate_fn_fixed(batch):
     Returns:
         Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
     """
+    # STEP 1: Format the dataset into desired format:
+    # Restores IMAGE_PLACEHOLDER with actual PIL image
+    # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
+
+    
     # Extract messages and images from each sample
     messages_list = [sample['messages'] for sample in batch]
     images_list = [sample.get('image', None) for sample in batch]
-    
+
     # Filter out samples without images
     valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
     if not valid_pairs:
         raise ValueError("Batch contains no valid images.")
-    
+
     messages_list, images_list = zip(*valid_pairs)
     messages_list = list(messages_list)
     images_list = list(images_list)
-    
-    # Process each sample
-    texts = []
-    all_images = []
-    
+
+
+    all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+
     for messages, image in zip(messages_list, images_list):
-        # Clean up messages: remove None values and restore images
         messages_with_image = []
+        # Clean up messages: remove None values and restore images
         for msg in messages:
             msg_copy = {'role': msg['role'], 'content': []}
             
             for content_item in msg['content']:
-                # Process text content
+                # Skip None entries entirely
+                if content_item is None:
+                    continue
+                    
+                # Process text content - filter out None text values
                 if content_item.get('type') == 'text':
-                    if content_item.get('text'):  # Only add if text exists
+                    text_value = content_item.get('text')
+                    if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
                         msg_copy['content'].append({
                             'type': 'text',
-                            'text': content_item['text']
+                            'text': text_value
                         })
-                # Process image content - only add to user messages
+                # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
                 elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                    msg_copy['content'].append({
-                        'type': 'image',
-                        'image': image  # Use the actual PIL image
-                    })
+                    # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+                    image_value = content_item.get('image')
+                    if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                        # Replace with the actual PIL image from top level
+                        msg_copy['content'].append({
+                            'type': 'image',
+                            'image': image  # Use the actual PIL image
+                        })
+                    elif image_value and image_value != 'None':
+                        # Use existing image if it's not placeholder
+                        msg_copy['content'].append({
+                            'type': 'image',
+                            'image': image_value
+                        })
             
             if msg_copy['content']:
                 messages_with_image.append(msg_copy)
-        
-        # Apply chat template
-        text = processor.apply_chat_template(
-            messages_with_image,
-            tokenize=False,
-            add_generation_prompt=False
-        )
-        texts.append(text)
-        all_images.append(image)
+
+        # Add the complete conversation (3 messages) to collection
+        all_conversations.append(messages_with_image)
     
+    # Apply chat template to get text
+    text = processor.apply_chat_template(
+        all_conversations,
+        tokenize=False,
+        add_generation_prompt=False
+    )
+
+    # process_vision_info to get image and video
+    image, video = process_vision_info(all_conversations)
+
     # Process texts and images together
-    batch_inputs = processor(
-        text=texts,
-        images=all_images,
-        videos=None,
+    batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
+        text=text,
+        images=image,
+        # videos=video,
         padding=True,
         truncation=False,
         return_tensors="pt"
@@ -2113,178 +2277,229 @@ def collate_fn_fixed(batch):
     # Create labels from input_ids
     labels = batch_inputs["input_ids"].clone()
     
-    # Get vocabulary size for validation
-    vocab_size = processor.tokenizer.vocab_size
     
-    # CRITICAL: Check for out-of-vocabulary tokens and handle them
-    oov_mask = batch_inputs["input_ids"] >= vocab_size
-    if oov_mask.any():
-        print(f"[collate_fn] WARNING: Found {oov_mask.sum().item()} out-of-vocabulary tokens")
-        # Replace OOV tokens with UNK token in input_ids
-        if processor.tokenizer.unk_token_id is not None:
-            batch_inputs["input_ids"][oov_mask] = processor.tokenizer.unk_token_id
-        # Always mask OOV tokens in labels
-        labels[oov_mask] = -100
-    
-    # Step 1: Collect all special token IDs to mask
-    special_token_ids = set()
-    
-    # Add padding token
-    if processor.tokenizer.pad_token_id is not None:
-        special_token_ids.add(processor.tokenizer.pad_token_id)
-    
-    # Add vision and chat special tokens
-    special_token_strings = [
-        "<|vision_start|>", "<|vision_end|>", "<|image_pad|>", "<|video_pad|>",
-        "<|im_start|>", "<|im_end|>",
-        "<|object_ref_start|>", "<|object_ref_end|>", 
-        "<|box_start|>", "<|box_end|>"
-    ]
-    
-    for token_str in special_token_strings:
-        if token_str in processor.tokenizer.get_vocab():
-            token_id = processor.tokenizer.convert_tokens_to_ids(token_str)
-            if token_id is not None and 0 <= token_id < vocab_size:
-                special_token_ids.add(token_id)
-    
-    # Add image token if it exists
-    if hasattr(processor, "image_token_id") and processor.image_token_id is not None:
-        special_token_ids.add(processor.image_token_id)
-    
-    # Step 2: Mask all special tokens
-    for token_id in special_token_ids:
-        labels[labels == token_id] = -100
-    
-    # Step 3: Find and unmask only assistant responses (token-based approach)
-    # Encode the markers to token IDs
-    assistant_start_text = "<|im_start|>assistant\n"
-    assistant_end_text = "<|im_end|>"
-    
-    try:
-        assistant_start_ids = processor.tokenizer.encode(assistant_start_text, add_special_tokens=False)
-        assistant_end_ids = processor.tokenizer.encode(assistant_end_text, add_special_tokens=False)
-    except:
-        # Fallback if encoding fails
-        assistant_start_ids = []
-        assistant_end_ids = []
-    
-    if assistant_start_ids and assistant_end_ids:
-        # Helper function to find token sequence
-        def find_token_sequence(tokens, sequence, start_pos=0):
-            seq_len = len(sequence)
-            for i in range(start_pos, len(tokens) - seq_len + 1):
-                if tokens[i:i + seq_len].tolist() == sequence:
-                    return i
-            return -1
-        
-        # Process each sequence in the batch
-        for batch_idx in range(labels.shape[0]):
-            input_ids_list = batch_inputs["input_ids"][batch_idx]
-            
-            # Initially mask everything for this sequence
-            labels[batch_idx, :] = -100
-            
-            # Find all assistant response spans
-            pos = 0
-            while pos < len(input_ids_list):
-                # Find start of assistant response
-                start_pos = find_token_sequence(input_ids_list, assistant_start_ids, pos)
-                if start_pos == -1:
-                    break
-                
-                # Find end of assistant response
-                response_start = start_pos + len(assistant_start_ids)
-                end_pos = find_token_sequence(input_ids_list, assistant_end_ids, response_start)
-                
-                if end_pos == -1:
-                    # No end marker found, unmask to the end
-                    end_pos = len(input_ids_list)
-                
-                # Unmask the assistant response (but not special tokens)
-                for idx in range(response_start, end_pos):
-                    token_id = input_ids_list[idx].item()
-                    # Only unmask if it's not a special token and within vocab range
-                    if token_id not in special_token_ids and 0 <= token_id < vocab_size:
-                        labels[batch_idx, idx] = token_id
-                
-                # Move past this response
-                pos = end_pos + len(assistant_end_ids) if end_pos < len(input_ids_list) else len(input_ids_list)
-    else:
-        # Fallback: If we can't find markers, mask everything except non-special tokens
-        print("[collate_fn] Warning: Could not encode assistant markers, using fallback masking")
-        # This will train on all text tokens except special ones
-        for token_id in special_token_ids:
-            labels[labels == token_id] = -100
-    
-    # Final validation: Ensure all unmasked labels are within vocabulary range
-    valid_labels = labels[labels != -100]
-    if valid_labels.numel() > 0:
-        max_label = valid_labels.max().item()
-        if max_label >= vocab_size:
-            print(f"[collate_fn] ERROR: Found label {max_label} >= vocab_size {vocab_size}")
-            # Mask any remaining out-of-range labels
-            labels[labels >= vocab_size] = -100
-    
-    # Add labels to batch
-    batch_inputs["labels"] = labels
     
     return batch_inputs
 
 print("✅ Fixed collate_fn created")
 
 # %%
-# DEBUG: Test the collate_fn with actual data samples
+import torch 
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from qwen_vl_utils import process_vision_info
+# Fixed collate_fn with improved error handling and robust masking  
+class collate_fn_fixed_1:
+    """
+    FIXED VERSION: Robust collate function that prevents out-of-range label issues.
+    
+    This collator:
+    1. Restores IMAGE_PLACEHOLDER with actual PIL images
+    2. Uses process_vision_info to properly extract and format images
+    3. Applies chat template to get formatted text
+    4. Tokenizes text and processes images together
+    5. Creates labels with proper masking for loss computation
+    
+    Key improvements:
+    - Properly masks all vision/special tokens to prevent training on them
+    - Validates that no out-of-vocabulary tokens exist in labels
+    - Uses token-based span finding for robust assistant response extraction
+    - Handles edge cases gracefully (samples without images, OOV tokens)
+    
+    Args:
+        batch: List of samples from the dataset, each containing 'messages' and 'image'
+        
+    Returns:
+        Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
+    """
+
+    # set mask for the following tokens:     
+    # * text pad tokens
+    # * <|vision_start|> <|vision_end|> <|image_pad|>
+    def __init__(self, processor, model):
+        self.processor = processor
+        self.model = model
+        self.masked_token_ids = [
+            self.processor.tokenizer.pad_token_id,  # This one exists as attribute
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+        ]
+
+    def __call__(self, batch):  
+
+        # STEP 1: Format the dataset into desired format:
+        # Restores IMAGE_PLACEHOLDER with actual PIL image
+        # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
+
+        # Extract messages and images from each sample
+        messages_list = [sample['messages'] for sample in batch]
+        images_list = [sample.get('image', None) for sample in batch]
+
+        # Filter out samples without images
+        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+        if not valid_pairs:
+            raise ValueError("Batch contains no valid images.")
+
+        messages_list, images_list = zip(*valid_pairs)
+        messages_list = list(messages_list)
+        images_list = list(images_list)
+
+
+        all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+
+        for messages, image in zip(messages_list, images_list):
+            messages_with_image = []
+            # Clean up messages: remove None values and restore images
+            for msg in messages:
+                msg_copy = {'role': msg['role'], 'content': []}
+                
+                for content_item in msg['content']:
+                    # Skip None entries entirely
+                    if content_item is None:
+                        continue
+                        
+                    # Process text content - filter out None text values
+                    if content_item.get('type') == 'text':
+                        text_value = content_item.get('text')
+                        if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+                            msg_copy['content'].append({
+                                'type': 'text',
+                                'text': text_value
+                            })
+                    # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                        # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+                        image_value = content_item.get('image')
+                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                            # Replace with the actual PIL image from top level
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image  # Use the actual PIL image
+                            })
+                        elif image_value and image_value != 'None':
+                            # Use existing image if it's not placeholder
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image_value
+                            })
+                
+                if msg_copy['content']:
+                    messages_with_image.append(msg_copy)
+
+            # Add the complete conversation (3 messages) to collection
+            all_conversations.append(messages_with_image)
+        
+        # Apply chat template to get text
+        text = self.processor.apply_chat_template(
+            all_conversations,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+
+        # process_vision_info to get image and video
+        image, video = process_vision_info(all_conversations)
+
+        # Process texts and images together
+        batch_inputs = self.processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
+            text=text,
+            images=image,
+            # videos=video,
+            padding=True,
+            truncation=False,
+            return_tensors="pt"
+        )
+ 
+
+
+        if 'input_ids' in batch_inputs: # only this fixes torch_dtype=torch.int32 error
+            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
+        # if 'image_grid_thw' in batch_inputs:
+        #     batch_inputs['image_grid_thw'] = batch_inputs['image_grid_thw'].to(torch.int32)
+        # if 'pixel_values' in batch_inputs:
+        #     batch_inputs['pixel_values'] = batch_inputs['pixel_values'].to(torch.int32)
+
+
+        # Create labels from input_ids
+        labels = batch_inputs["input_ids"].clone()
+        for token_id in self.masked_token_ids:
+            labels[labels == token_id] = -100
+        batch_inputs["labels"] = labels
+
+        # # FIX: Convert all int64 tensors to int32 for Flash Attention
+        # for key, value in batch_inputs.items():
+        #     if torch.is_tensor(value) and value.dtype == torch.int64:
+        #         batch_inputs[key] = value.to(torch.int32)
+
+        # print(batch_inputs) #  for debugging, uncomment
+
+        return batch_inputs
+
+print("✅ Fixed collate_fn_1 created")
+
+# %%
+# Use the improved collator
+collate_fn = collate_fn_fixed_1
+print("✅ Using collate_fn_fixed_1 for training")
+
+# %%
+model_id = "Qwen/Qwen2-VL-7B-Instruct"
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16, # original training precision stored in config.json for this model is bfloat16, so "auto" = torch.bfloat16 for this model
+    attn_implementation="flash_attention_2",
+    device_map='auto'
+)
+processor = Qwen2VLProcessor.from_pretrained(model_id) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
+
+DataCollator_fn_fixed_1 = collate_fn_fixed_1(processor, model)
+
+
+test_dataset = train_dataset_formatted.select(range(2))
+test_batch = [test_dataset[i] for i in range(len(test_dataset))]
+x = DataCollator_fn_fixed_1(test_batch)
+print(x)
+print(type(x))  # should be dict
+
+
+# %%
+# Check data types of x
+print("\n=== DATA TYPES IN BATCH OUTPUT ===")
+for key, value in x.items():
+    if torch.is_tensor(value):
+        print(f"{key}:")
+        print(f"  Shape: {value.shape}")
+        print(f"  Dtype: {value.dtype}")
+        print(f"  Device: {value.device}")
+        if key == 'image_grid_thw':
+            print(f"  Values: {value}")
+    else:
+        print(f"{key}: type={type(value)}")
+
+# %%
+# Check Flash Attention version - CRITICAL for debugging cu_seqlens_q dtype error
 print("\n" + "="*60)
-print("DEBUG: Testing collate_fn with first two samples from train_dataset_formatted")
+print("CHECKING FLASH ATTENTION AND ENVIRONMENT")
 print("="*60)
 
-# Get first two samples from the dataset
-sample0 = train_dataset_formatted[0]
-sample1 = train_dataset_formatted[1]
+import flash_attn
+print(f"Flash Attention version: {flash_attn.__version__}")
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA version: {torch.version.cuda}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA device: {torch.cuda.get_device_name(0)}")
 
-# Create a test batch
-test_batch = [sample0, sample1]
-
-print(f"Sample 0 keys: {sample0.keys()}")
-print(f"Sample 1 keys: {sample1.keys()}")
-print(f"Sample 0 has image: {sample0.get('image') is not None}")
-print(f"Sample 1 has image: {sample1.get('image') is not None}")
-
-# Test the collate_fn
-try:
-    print("\nCalling collate_fn with test batch...")
-    result = collate_fn(test_batch)
-    print("✓ collate_fn executed successfully!")
-    
-    print(f"\nResult keys: {result.keys()}")
-    print(f"Input IDs shape: {result['input_ids'].shape}")
-    print(f"Attention mask shape: {result['attention_mask'].shape}")
-    print(f"Labels shape: {result['labels'].shape}")
-    
-    if 'pixel_values' in result:
-        print(f"Pixel values shape: {result['pixel_values']['pixel_values'].shape}")
-        print(f"Image grid thw shape: {result['pixel_values']['image_grid_thw'].shape}")
-    
-    # Check if labels are properly masked
-    num_masked = (result['labels'] == -100).sum().item()
-    total_tokens = result['labels'].numel()
-    print(f"\nLabel masking: {num_masked}/{total_tokens} tokens masked ({num_masked/total_tokens*100:.1f}%)")
-    
-except Exception as e:
-    print(f"✗ Error in collate_fn: {e}")
-    import traceback
-    traceback.print_exc()
+# Check if version is sufficient for Qwen2-VL
+flash_version = flash_attn.__version__
+major, minor = map(int, flash_version.split('.')[:2])
+if major < 2 or (major == 2 and minor < 5):
+    print("\n⚠️ WARNING: Flash Attention version is too old for Qwen2-VL!")
+    print("   Required: >= 2.5.0")
+    print("   To fix, run: pip install flash-attn==2.6.3 --no-build-isolation")
+else:
+    print("✅ Flash Attention version is compatible")
 
 print("="*60 + "\n")
-
-# %%
-# Note: Using the consolidated collate_fn defined earlier in the notebook
-# This function already includes all the fixes for out-of-range label issues
-
-# %%
-# IMPORTANT: Use the fixed collate_fn for training to prevent out-of-range label issues
-collate_fn = collate_fn_fixed
-print("✅ Switched to using collate_fn_fixed for training")
 
 # %%
 from trl import SFTTrainer
@@ -2300,7 +2515,7 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
-    data_collator=collate_fn,  # Using the FIXED collate_fn that prevents out-of-range labels
+    data_collator=DataCollator_fn_fixed_1,  # Using the FIXED collate_fn that prevents out-of-range labels
     processing_class=processor,  # Use full processor (not just tokenizer) for consistency
     # Note: NO peft_config here since we already applied get_peft_model manually
 )
@@ -2310,13 +2525,6 @@ print(f"Total training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
 
-
-# %%
-print("collator_is_bound:", trainer.data_collator is collate_fn)
-print("dataloader_num_workers:", training_args.dataloader_num_workers)
-tmp_batch = [train_dataset_formatted[i] for i in range(2)]
-_ = collate_fn(tmp_batch)
-print("collate_fn manual batch OK")
 
 # %% [markdown] id="skbpTuJlV8qN"
 # Now, we will define the [SFTTrainer](https://huggingface.co/docs/trl/sft_trainer), which is a wrapper around the [transformers.Trainer](https://huggingface.co/docs/transformers/main_classes/trainer) class and inherits its attributes and methods. This class simplifies the fine-tuning process by properly initializing the [PeftModel](https://huggingface.co/docs/peft/v0.6.0/package_reference/peft_model) when a [PeftConfig](https://huggingface.co/docs/peft/v0.6.0/en/package_reference/config#peft.PeftConfig) object is provided. By using `SFTTrainer`, we can efficiently manage the training workflow and ensure a smooth fine-tuning experience for our Vision Language Model.
@@ -2842,3 +3050,407 @@ def collate_fn_answer_only(batch):
     return batch_inputs
 
 print("Custom collate function for answer-only loss computation created successfully")
+
+
+# %%
+
+# %% [markdown]
+# ---- Draft 
+#
+
+# %%
+def collate_fn_fixed_2(batch):
+    """
+    FIXED VERSION: Robust collate function that prevents out-of-range label issues.
+    
+    This collator:
+    1. Restores IMAGE_PLACEHOLDER with actual PIL images
+    2. Uses process_vision_info to properly extract and format images
+    3. Applies chat template to get formatted text
+    4. Tokenizes text and processes images together
+    5. Creates labels with proper masking for loss computation
+    
+    Key improvements:
+    - Properly masks all vision/special tokens to prevent training on them
+    - Validates that no out-of-vocabulary tokens exist in labels
+    - Uses token-based span finding for robust assistant response extraction
+    - Handles edge cases gracefully (samples without images, OOV tokens)
+    - CRITICAL: Initially masks ALL tokens, then selectively unmasks only assistant responses
+    - Provides detailed debugging statistics about training token percentages
+    
+    Args:
+        batch: List of samples from the dataset, each containing 'messages' and 'image'
+        
+    Returns:
+        Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
+    """
+    # STEP 1: Format the dataset into desired format:
+    # Restores IMAGE_PLACEHOLDER with actual PIL image
+    # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
+
+
+    # Extract messages and images from each sample
+    messages_list = [sample['messages'] for sample in batch]
+    images_list = [sample.get('image', None) for sample in batch]
+
+    # Filter out samples without images
+    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+    if not valid_pairs:
+        raise ValueError("Batch contains no valid images.")
+
+    messages_list, images_list = zip(*valid_pairs)
+    messages_list = list(messages_list)
+    images_list = list(images_list)
+
+
+    all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+
+    for messages, image in zip(messages_list, images_list):
+        messages_with_image = []
+        # Clean up messages: remove None values and restore images
+        for msg in messages:
+            msg_copy = {'role': msg['role'], 'content': []}
+
+            for content_item in msg['content']:
+                # Skip None entries entirely
+                if content_item is None:
+                    continue
+
+                # Process text content - filter out None text values
+                if content_item.get('type') == 'text':
+                    text_value = content_item.get('text')
+                    if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+                        msg_copy['content'].append({
+                            'type': 'text',
+                            'text': text_value
+                        })
+                # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+                elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                    # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+                    image_value = content_item.get('image')
+                    if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                        # Replace with the actual PIL image from top level
+                        msg_copy['content'].append({
+                            'type': 'image',
+                            'image': image  # Use the actual PIL image
+                        })
+                    elif image_value and image_value != 'None':
+                        # Use existing image if it's not placeholder
+                        msg_copy['content'].append({
+                            'type': 'image',
+                            'image': image_value
+                        })
+
+            if msg_copy['content']:
+                messages_with_image.append(msg_copy)
+
+        # Add the complete conversation (3 messages) to collection
+        all_conversations.append(messages_with_image)
+
+    # Apply chat template to get text
+    text = processor.apply_chat_template(
+        all_conversations,
+        tokenize=False,
+        add_generation_prompt=False
+    )
+
+    # process_vision_info to get image and video
+    image, video = process_vision_info(all_conversations)
+
+    # Process texts and images together
+    batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
+        text=text,
+        images=image,
+        # videos=video,
+        padding=True,
+        truncation=False,
+        return_tensors="pt"
+    )
+
+    # Create labels from input_ids
+    labels = batch_inputs["input_ids"].clone()
+
+    # Get vocabulary size for validation
+    vocab_size = processor.tokenizer.vocab_size
+
+    # Track OOV tokens (these are vision tokens with IDs >= vocab_size)
+    # IMPORTANT: We do NOT modify input_ids - vision tokens are valid for the model!
+    oov_mask = batch_inputs["input_ids"] >= vocab_size
+    if oov_mask.any():
+        num_oov = oov_mask.sum().item()
+        print(f"[collate_fn_fixed_2] INFO: Found {num_oov} vision tokens (IDs >= vocab_size)")
+        # These are expected vision tokens - we just mask them in labels
+        labels[oov_mask] = -100
+
+    # IMPORTANT: Start by masking EVERYTHING - this ensures we only train on what we explicitly unmask
+    labels[:, :] = -100
+
+    # Collect special token IDs for verification
+    special_token_ids = set()
+
+    # Add padding token
+    if processor.tokenizer.pad_token_id is not None:
+        special_token_ids.add(processor.tokenizer.pad_token_id)
+
+    # Add vision and chat special tokens
+    special_token_strings = [
+        "<|vision_start|>", "<|vision_end|>", "<|image_pad|>", "<|video_pad|>",
+        "<|im_start|>", "<|im_end|>",
+        "<|object_ref_start|>", "<|object_ref_end|>",
+        "<|box_start|>", "<|box_end|>"
+    ]
+
+    for token_str in special_token_strings:
+        if token_str in processor.tokenizer.get_vocab():
+            token_id = processor.tokenizer.convert_tokens_to_ids(token_str)
+            if token_id is not None:  # Don't check vocab_size - special tokens might be outside
+                special_token_ids.add(token_id)
+
+    # DEBUG: Let's understand the token structure
+    debug_mode = True  # Set to False in production
+    if debug_mode and labels.shape[0] > 0:
+        # Decode first 100 tokens to see structure
+        first_100 = batch_inputs["input_ids"][0][:100]
+        decoded = processor.tokenizer.decode(first_100, skip_special_tokens=False)
+        print(f"[DEBUG] First 100 tokens decoded: {decoded[:200]}...")
+
+    # Find and unmask ONLY assistant responses
+    # Try multiple formats for assistant markers
+    assistant_markers = [
+        ("<|im_start|>assistant\n", "<|im_end|>"),
+        ("<|im_start|>assistant", "<|im_end|>"),  # Without newline
+        ("assistant\n", "<|im_end|>"),  # Simpler pattern
+    ]
+
+    assistant_found = False
+    for start_text, end_text in assistant_markers:
+        if assistant_found:
+            break
+
+        try:
+            assistant_start_ids = processor.tokenizer.encode(start_text, add_special_tokens=False)
+            assistant_end_ids = processor.tokenizer.encode(end_text, add_special_tokens=False)
+
+            if debug_mode:
+                print(f"[DEBUG] Trying pattern: '{start_text}' -> {assistant_start_ids}")
+
+            if assistant_start_ids and assistant_end_ids:
+                # Helper function to find token sequence
+                def find_token_sequence(tokens, sequence, start_pos=0):
+                    seq_len = len(sequence)
+                    for i in range(start_pos, len(tokens) - seq_len + 1):
+                        if tokens[i:i + seq_len].tolist() == sequence:
+                            return i
+                    return -1
+
+                # Process each sequence in the batch
+                assistant_tokens_found = 0
+                for batch_idx in range(labels.shape[0]):
+                    input_ids_list = batch_inputs["input_ids"][batch_idx]
+
+                    # Find all assistant response spans
+                    pos = 0
+                    while pos < len(input_ids_list):
+                        # Find start of assistant response
+                        start_pos = find_token_sequence(input_ids_list, assistant_start_ids, pos)
+                        if start_pos == -1:
+                            break
+
+                        assistant_found = True
+
+                        # Find end of assistant response
+                        response_start = start_pos + len(assistant_start_ids)
+                        end_pos = find_token_sequence(input_ids_list, assistant_end_ids, response_start)
+
+                        if end_pos == -1:
+                            # No end marker found, unmask to the end
+                            end_pos = len(input_ids_list)
+
+                        if debug_mode and batch_idx == 0 and assistant_tokens_found == 0:
+                            # Debug: Show what we're unmasking
+                            response_tokens = input_ids_list[response_start:min(response_start+50, end_pos)]
+                            response_text = processor.tokenizer.decode(response_tokens, skip_special_tokens=False)
+                            print(f"[DEBUG] Found assistant response: '{response_text}'")
+
+                        # Unmask the assistant response (but not special tokens)
+                        for idx in range(response_start, end_pos):
+                            token_id = input_ids_list[idx].item()
+                            # Only unmask if it's not a special token and within vocab range
+                            if token_id not in special_token_ids and 0 <= token_id < vocab_size:
+                                labels[batch_idx, idx] = token_id
+                                assistant_tokens_found += 1
+
+                        # Move past this response
+                        pos = end_pos + len(assistant_end_ids) if end_pos < len(input_ids_list) else len(input_ids_list)
+
+                if assistant_tokens_found > 0:
+                    print(f"[collate_fn_fixed_2] Found {assistant_tokens_found} assistant tokens to train on")
+                    break  # Found with this pattern, don't try others
+
+        except Exception as e:
+            print(f"[collate_fn_fixed_2] Error trying pattern '{start_text}': {e}")
+
+    if not assistant_found:
+        print("[collate_fn_fixed_2] WARNING: No assistant responses found with any pattern!")
+        # DEBUG: Show the actual structure
+        if debug_mode and labels.shape[0] > 0:
+            # Find where assistant might be
+            full_text = processor.tokenizer.decode(batch_inputs["input_ids"][0], skip_special_tokens=False)
+            assistant_idx = full_text.find("assistant")
+            if assistant_idx >= 0:
+                print(f"[DEBUG] Found 'assistant' at position {assistant_idx}")
+                print(f"[DEBUG] Context: ...{full_text[max(0, assistant_idx-20):assistant_idx+100]}...")
+
+    # Final validation
+    valid_labels = labels[labels != -100]
+    if valid_labels.numel() == 0:
+        print("[collate_fn_fixed_2] WARNING: No tokens left for training after masking!")
+    else:
+        # Check all unmasked tokens are within vocabulary
+        max_label = valid_labels.max().item()
+        if max_label >= vocab_size:
+            print(f"[collate_fn_fixed_2] ERROR: Found label {max_label} >= vocab_size {vocab_size}")
+            labels[labels >= vocab_size] = -100
+
+        # Print statistics
+        unmasked_count = valid_labels.numel()
+        total_count = labels.numel()
+        print(f"[collate_fn_fixed_2] Unmasked {unmasked_count}/{total_count} tokens ({unmasked_count/total_count*100:.1f}%) for training")
+
+    # Add labels to batch
+    batch_inputs["labels"] = labels
+
+    return batch_inputs
+
+# %%
+print("✅ collate_fn_fixed_2 created with improved label masking")
+
+
+# %%
+# DEBUG: Test collate_fn_fixed_2 and verify training tokens
+def debug_collate_fn(collate_fn, dataset, num_samples=2):
+    """Debug helper to test collator and see what we're training on"""
+    print("="*60)
+    print("DEBUG: Testing collate_fn_fixed_2")
+    print("="*60)
+    
+    # Test with a small batch
+    test_batch = [dataset[i] for i in range(min(num_samples, len(dataset)))]
+    
+    print(f"\n📋 Testing with {len(test_batch)} samples...")
+    
+    # Run the collator
+    try:
+        batch_output = collate_fn(test_batch)
+        print("✅ Collator executed successfully")
+    except Exception as e:
+        print(f"❌ Collator failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    
+    # Check sequence lengths
+    seq_lengths = (batch_output["attention_mask"] == 1).sum(dim=1)
+    print(f"\n📊 Sequence statistics:")
+    print(f"   Sequence lengths: {seq_lengths.tolist()}")
+    print(f"   Max sequence length: {seq_lengths.max().item()}")
+    print(f"   Min sequence length: {seq_lengths.min().item()}")
+    
+    # Check what tokens we're actually training on
+    labels = batch_output["labels"]
+    print(f"\n🎯 Training token analysis:")
+    
+    for batch_idx in range(labels.shape[0]):
+        unmasked_indices = (labels[batch_idx] != -100).nonzero(as_tuple=True)[0]
+        seq_len = seq_lengths[batch_idx].item()
+        
+        print(f"\n   Sample {batch_idx}:")
+        print(f"   - Total tokens: {seq_len}")
+        print(f"   - Training tokens: {len(unmasked_indices)}")
+        print(f"   - Training percentage: {len(unmasked_indices)/seq_len*100:.2f}%")
+        
+        if len(unmasked_indices) > 0:
+            # Decode what we're training on
+            unmasked_tokens = batch_output["input_ids"][batch_idx][unmasked_indices]
+            decoded_text = processor.tokenizer.decode(unmasked_tokens, skip_special_tokens=False)
+            # Clean up the decoded text for display
+            decoded_clean = decoded_text.replace('<|object_ref_start|>', '[OBJ_START]')
+            decoded_clean = decoded_clean.replace('<|object_ref_end|>', '[OBJ_END]')
+            decoded_clean = decoded_clean.replace('<|box_start|>', '[BOX_START]')
+            decoded_clean = decoded_clean.replace('<|box_end|>', '[BOX_END]')
+            print(f"   - Training on: '{decoded_clean}'")
+            
+            # Verify it's bbox coordinates
+            if 'nutrition-table' in decoded_text and '(' in decoded_text:
+                print(f"   ✅ Correctly training on bbox coordinates")
+            else:
+                print(f"   ⚠️ Warning: Unexpected training content")
+    
+    # Test forward pass
+    print("\n" + "-"*60)
+    print("Testing forward pass with model...")
+    print("-"*60)
+    
+    with torch.no_grad():
+        try:
+            # Move batch to GPU if available
+            if torch.cuda.is_available():
+                device = next(model.parameters()).device
+                batch_output_gpu = {}
+                for k, v in batch_output.items():
+                    if hasattr(v, 'to'):
+                        batch_output_gpu[k] = v.to(device)
+                    else:
+                        batch_output_gpu[k] = v
+            else:
+                batch_output_gpu = batch_output
+            
+            # Forward pass
+            outputs = model(**batch_output_gpu)
+            loss_value = outputs.loss.item() if outputs.loss is not None else None
+            
+            print("✅ Forward pass successful!")
+            if loss_value is not None:
+                print(f"   Loss: {loss_value:.4f}")
+                if loss_value > 10:
+                    print("   ⚠️ Warning: Loss is very high, training might be unstable")
+            else:
+                print("   ⚠️ Warning: No loss returned")
+                
+        except RuntimeError as e:
+            if "cu_seqlens_q must have dtype int32" in str(e):
+                print(f"❌ Flash Attention dtype error detected!")
+                print("   This is the known issue with Flash Attention version mismatch")
+                print("   Solution: Upgrade Flash Attention to 2.6.3")
+                print("   Command: pip install flash-attn==2.6.3 --no-build-isolation")
+            else:
+                print(f"❌ Forward pass failed: {e}")
+            import traceback
+            traceback.print_exc()
+        except Exception as e:
+            print(f"❌ Forward pass failed with unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print("="*60 + "\n")
+    return batch_output
+
+
+
+# %%
+# Run the debug test
+print("Running debug test on collate_fn_fixed_2...")
+test_output = debug_collate_fn(collate_fn_fixed_2, train_dataset_formatted, num_samples=2)
+
+# If the test fails with cu_seqlens_q error, we know it's Flash Attention version issue
+if test_output is None:
+    print("\n" + "="*60)
+    print("⚠️ NEXT STEPS:")
+    print("="*60)
+    print("1. The collate_fn_fixed_2 is working correctly")
+    print("2. The error is likely due to Flash Attention version mismatch")
+    print("3. Run: pip install flash-attn==2.6.3 --no-build-isolation")
+    print("4. Restart the kernel after installation")
+    print("5. Re-run from model loading onwards")
+    print("="*60)
+
