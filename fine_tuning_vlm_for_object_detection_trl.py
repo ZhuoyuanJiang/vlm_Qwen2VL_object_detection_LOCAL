@@ -29,7 +29,7 @@
 # 1. Automatically scans all GPUs for availability
 # 2. Selects GPUs with <2GB memory used and <10% utilization
 # 3. Can use 1 or 2 GPUs (configurable with `prefer_multi_gpu`)
-# 4. Falls back to GPU 6 if auto-selection fails
+# 4. Falls back to the GPU with most free memory if auto-selection fails
 #
 # **To use 2 GPUs** (like original paper): Set `prefer_multi_gpu=True` below
 
@@ -40,9 +40,13 @@ import sys
 import subprocess
 # Note: torch import moved below after setting CUDA_VISIBLE_DEVICES
 
+# Set memory management for better GPU utilization
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # CONFIGURATION: Set this based on your needs
 # Original paper uses 2x A6000 (48GB each), but 1x RTX 6000 Ada (48GB) may be sufficient
 USE_DUAL_GPU = True  # Set to True to use 2 GPUs like the original paper, False for 1 GPU
+MAX_GPUS = 2  # Maximum number of GPUs to use (to avoid occupying all lab resources)
 
 print("=" * 60)
 print("🖥️  AUTOMATIC GPU CONFIGURATION")
@@ -70,33 +74,74 @@ def find_available_gpus(num_gpus_needed=1):
                 available.append(gpu_idx)
         
         # Return exactly the number of GPUs requested (not more!)
+        # IMPORTANT: This ensures we only use the requested number of GPUs
+        # to avoid occupying all lab resources
         if len(available) >= num_gpus_needed:
-            return available[:num_gpus_needed]  # Take only what we need
+            return available[:num_gpus_needed]  # Take ONLY what we need, not all available
         else:
-            return available  # Return what we have
+            return available  # Return what we have (might be less than requested)
             
     except Exception as e:
         print(f"Error checking GPUs: {e}")
         return []
 
-# Determine how many GPUs to use
+# Determine how many GPUs to use (enforce MAX_GPUS limit)
 num_gpus = 2 if USE_DUAL_GPU else 1
+num_gpus = min(num_gpus, MAX_GPUS)  # Never exceed MAX_GPUS
 print(f"Configuration: {'DUAL GPU (like original paper)' if USE_DUAL_GPU else 'SINGLE GPU (test mode)'}")
-print(f"Looking for {num_gpus} available GPU(s)...")
+print(f"Looking for {num_gpus} available GPU(s) (max {MAX_GPUS} to preserve lab resources)...")
 
 # Find available GPUs
 available_gpus = find_available_gpus(num_gpus)
 
 if len(available_gpus) > 0:
+    # Ensure we never use more than MAX_GPUS even if more are found
+    available_gpus = available_gpus[:MAX_GPUS]
     gpu_string = ','.join(str(g) for g in available_gpus)
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_string
     print(f"✅ Found {len(available_gpus)} available GPU(s): {available_gpus}")
+    print(f"   (Limited to max {MAX_GPUS} GPUs to preserve lab resources)")
     if USE_DUAL_GPU and len(available_gpus) == 1:
         print("⚠️ Warning: Only 1 GPU available, but 2 were requested")
 else:
-    # Fallback to GPU 6
-    os.environ["CUDA_VISIBLE_DEVICES"] = "6"
-    print("⚠️ No free GPUs found via auto-detection, using GPU 6 as fallback")
+    # Try to find ANY available GPU as fallback
+    print("⚠️ No free GPUs found with standard criteria, checking all GPUs...")
+    
+    # Try to find the GPU with most free memory
+    best_gpu = None
+    best_free_mem = 0
+    
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,memory.used,memory.total', 
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, check=True
+        )
+        
+        for line in result.stdout.strip().split('\n'):
+            parts = line.split(',')
+            gpu_idx = int(parts[0])
+            mem_used = int(parts[1])
+            mem_total = int(parts[2])
+            free_mem = mem_total - mem_used
+            
+            print(f"   GPU {gpu_idx}: {free_mem/1024:.1f} GB free")
+            
+            if free_mem > best_free_mem and free_mem > 20000:  # At least 20GB free
+                best_gpu = gpu_idx
+                best_free_mem = free_mem
+    except:
+        pass
+    
+    if best_gpu is not None:
+        # For fallback, still respect the MAX_GPUS limit (use only 1 GPU in fallback)
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(best_gpu)
+        print(f"✅ Using GPU {best_gpu} with {best_free_mem/1024:.1f} GB free memory")
+        print(f"   (Using single GPU in fallback mode to preserve lab resources)")
+    else:
+        print("❌ No GPUs available with sufficient memory!")
+        print("   Please free up GPU memory or wait for GPUs to become available")
+        sys.exit(1)
 
 # Verify configuration
 print(f"\nCUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
@@ -108,11 +153,20 @@ if torch.cuda.is_available():
     device_count = torch.cuda.device_count()
     total_memory = 0
     print(f"PyTorch sees {device_count} GPU(s):")
+    
+    # Verify we're not using more than MAX_GPUS
+    if device_count > MAX_GPUS:
+        print(f"⚠️ ERROR: PyTorch sees {device_count} GPUs but MAX_GPUS={MAX_GPUS}")
+        print("   This should not happen - CUDA_VISIBLE_DEVICES may not be set correctly")
+        
     for i in range(device_count):
         mem_gb = torch.cuda.get_device_properties(i).total_memory / 1024**3
         total_memory += mem_gb
         print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({mem_gb:.1f} GB)")
     print(f"\nTotal GPU memory available: {total_memory:.1f} GB")
+    
+    # Final confirmation
+    print(f"\n✅ CONFIRMED: Using exactly {device_count} GPU(s) (max allowed: {MAX_GPUS})")
     
     if device_count > 1:
         print("\n📝 Multi-GPU Training Notes:")
@@ -1611,234 +1665,221 @@ pprint(formatted_sample_1)
 # # Step by Step debugging the collating function before apply to chat template (to be deleted)
 
 # %%
-print(train_dataset_formatted[0])
-print(type(train_dataset_formatted))
-print(type(train_dataset_formatted[0]))
-print(type([train_dataset_formatted[0:10]]))
+# print(train_dataset_formatted[0])
+# print(type(train_dataset_formatted))
+# print(type(train_dataset_formatted[0]))
+# print(type([train_dataset_formatted[0:10]]))
 
 # %%
-batch = train_dataset_formatted
+# batch = train_dataset_formatted
 
-# Extract messages and images from each sample
-messages_list = [sample['messages'] for sample in batch]
-images_list = [sample.get('image', None) for sample in batch]
-
-
-
-# %%
-print(type(messages_list))
-print(type(images_list))
-# print(messages_list)
-# print(images_list)
-for i in range(5):
-    print(messages_list[i])
-    print(images_list[i])
-    print("-"*100)
-
-# %%
-print(len(messages_list))
-
-# %%
-# Filter out samples without images
-valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-if not valid_pairs:
-    raise ValueError("Batch contains no valid images.")
-
-messages_list, images_list = zip(*valid_pairs)
-messages_list = list(messages_list)
-images_list = list(images_list)
-
-# Process each sample
-texts = []
-all_images = []
+# # Extract messages and images from each sample
+# messages_list = [sample['messages'] for sample in batch]
+# images_list = [sample.get('image', None) for sample in batch]
 
 
 
 # %%
-all_conversations = []  # This will hold complete conversations
-
-for messages, image in zip(messages_list, images_list):
-    messages_with_image = []
-    # Clean up messages: remove None values and restore images
-    for msg in messages:
-        msg_copy = {'role': msg['role'], 'content': []}
-        
-        for content_item in msg['content']:
-            # Skip None entries entirely
-            if content_item is None:
-                continue
-                
-            # Process text content - filter out None text values
-            if content_item.get('type') == 'text':
-                text_value = content_item.get('text')
-                if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
-                    msg_copy['content'].append({
-                        'type': 'text',
-                        'text': text_value
-                    })
-            # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
-            elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                # Check if it's IMAGE_PLACEHOLDER and replace with actual image
-                image_value = content_item.get('image')
-                if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                    # Replace with the actual PIL image from top level
-                    msg_copy['content'].append({
-                        'type': 'image',
-                        'image': image  # Use the actual PIL image
-                    })
-                elif image_value and image_value != 'None':
-                    # Use existing image if it's not placeholder
-                    msg_copy['content'].append({
-                        'type': 'image',
-                        'image': image_value
-                    })
-        
-        if msg_copy['content']:
-            messages_with_image.append(msg_copy)
-
-    # Add the complete conversation (3 messages) to collection
-    all_conversations.append(messages_with_image)
-
-print("First 5 messages_with_image examples:")
-for i in range(min(5, len(all_conversations))):
-    print(f"\nExample {i}:")
-    print(all_conversations[i])
+# print(type(messages_list))
+# print(type(images_list))
+# # print(messages_list)
+# # print(images_list)
+# for i in range(5):
+#     print(messages_list[i])
+#     print(images_list[i])
+#     print("-"*100)
 
 # %%
-# Final Code to make sure the data is formatted correctly after dataset.map:
+# print(len(messages_list))
 
+# %%
+# # Filter out samples without images
+# valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+# if not valid_pairs:
+#     raise ValueError("Batch contains no valid images.")
 
-batch = train_dataset_formatted
+# messages_list, images_list = zip(*valid_pairs)
+# messages_list = list(messages_list)
+# images_list = list(images_list)
 
-# Extract messages and images from each sample
-messages_list = [sample['messages'] for sample in batch]
-images_list = [sample.get('image', None) for sample in batch]
-
-# Filter out samples without images
-valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-if not valid_pairs:
-    raise ValueError("Batch contains no valid images.")
-
-messages_list, images_list = zip(*valid_pairs)
-messages_list = list(messages_list)
-images_list = list(images_list)
-
-# Process each sample
+# # Process each sample
 # texts = []
 # all_images = []
 
-all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
 
-for messages, image in zip(messages_list, images_list):
-    messages_with_image = []
-    # Clean up messages: remove None values and restore images
-    for msg in messages:
-        msg_copy = {'role': msg['role'], 'content': []}
+
+# %%
+# all_conversations = []  # This will hold complete conversations
+
+# for messages, image in zip(messages_list, images_list):
+#     messages_with_image = []
+#     # Clean up messages: remove None values and restore images
+#     for msg in messages:
+#         msg_copy = {'role': msg['role'], 'content': []}
         
-        for content_item in msg['content']:
-            # Skip None entries entirely
-            if content_item is None:
-                continue
+#         for content_item in msg['content']:
+#             # Skip None entries entirely
+#             if content_item is None:
+#                 continue
                 
-            # Process text content - filter out None text values
-            if content_item.get('type') == 'text':
-                text_value = content_item.get('text')
-                if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
-                    msg_copy['content'].append({
-                        'type': 'text',
-                        'text': text_value
-                    })
-            # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
-            elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                # Check if it's IMAGE_PLACEHOLDER and replace with actual image
-                image_value = content_item.get('image')
-                if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                    # Replace with the actual PIL image from top level
-                    msg_copy['content'].append({
-                        'type': 'image',
-                        'image': image  # Use the actual PIL image
-                    })
-                elif image_value and image_value != 'None':
-                    # Use existing image if it's not placeholder
-                    msg_copy['content'].append({
-                        'type': 'image',
-                        'image': image_value
-                    })
+#             # Process text content - filter out None text values
+#             if content_item.get('type') == 'text':
+#                 text_value = content_item.get('text')
+#                 if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+#                     msg_copy['content'].append({
+#                         'type': 'text',
+#                         'text': text_value
+#                     })
+#             # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+#             elif content_item.get('type') == 'image' and msg['role'] == 'user':
+#                 # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+#                 image_value = content_item.get('image')
+#                 if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+#                     # Replace with the actual PIL image from top level
+#                     msg_copy['content'].append({
+#                         'type': 'image',
+#                         'image': image  # Use the actual PIL image
+#                     })
+#                 elif image_value and image_value != 'None':
+#                     # Use existing image if it's not placeholder
+#                     msg_copy['content'].append({
+#                         'type': 'image',
+#                         'image': image_value
+#                     })
         
-        if msg_copy['content']:
-            messages_with_image.append(msg_copy)
+#         if msg_copy['content']:
+#             messages_with_image.append(msg_copy)
 
-    # Add the complete conversation (3 messages) to collection
-    all_conversations.append(messages_with_image)
+#     # Add the complete conversation (3 messages) to collection
+#     all_conversations.append(messages_with_image)
 
-print("First 5 all_conversations examples:")
-for i in range(min(5, len(all_conversations))):
-    print(f"\nExample {i}:")
-    print(all_conversations[i])
-
-# %%
-# put a batch in apply_chat_template 
-
-text = processor.apply_chat_template(
-    all_conversations,
-    tokenize=False,
-    add_generation_prompt=False
-)
-
-for i in range(2):
-    print(text[i])
-    print("-"*100)
-
-print(type(text))
+# print("First 5 messages_with_image examples:")
+# for i in range(min(5, len(all_conversations))):
+#     print(f"\nExample {i}:")
+#     print(all_conversations[i])
 
 # %%
-# DELETE [This cell is to be deleted]
-# # for conversation in all_conversations[0:4]:    
-# #     # Apply chat template to get text
-# #     text = processor.apply_chat_template(
-# #         conversation,
-# #         tokenize=False,
-# #         add_generation_prompt=False
-# #     )
-# #     print(text)
+# # Final Code to make sure the data is formatted correctly after dataset.map:
 
 
+# batch = train_dataset_formatted
+
+# # Extract messages and images from each sample
+# messages_list = [sample['messages'] for sample in batch]
+# images_list = [sample.get('image', None) for sample in batch]
+
+# # Filter out samples without images
+# valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+# if not valid_pairs:
+#     raise ValueError("Batch contains no valid images.")
+
+# messages_list, images_list = zip(*valid_pairs)
+# messages_list = list(messages_list)
+# images_list = list(images_list)
+
+# # Process each sample
+# # texts = []
+# # all_images = []
+
+# all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+
+# for messages, image in zip(messages_list, images_list):
+#     messages_with_image = []
+#     # Clean up messages: remove None values and restore images
+#     for msg in messages:
+#         msg_copy = {'role': msg['role'], 'content': []}
+        
+#         for content_item in msg['content']:
+#             # Skip None entries entirely
+#             if content_item is None:
+#                 continue
+                
+#             # Process text content - filter out None text values
+#             if content_item.get('type') == 'text':
+#                 text_value = content_item.get('text')
+#                 if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+#                     msg_copy['content'].append({
+#                         'type': 'text',
+#                         'text': text_value
+#                     })
+#             # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+#             elif content_item.get('type') == 'image' and msg['role'] == 'user':
+#                 # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+#                 image_value = content_item.get('image')
+#                 if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+#                     # Replace with the actual PIL image from top level
+#                     msg_copy['content'].append({
+#                         'type': 'image',
+#                         'image': image  # Use the actual PIL image
+#                     })
+#                 elif image_value and image_value != 'None':
+#                     # Use existing image if it's not placeholder
+#                     msg_copy['content'].append({
+#                         'type': 'image',
+#                         'image': image_value
+#                     })
+        
+#         if msg_copy['content']:
+#             messages_with_image.append(msg_copy)
+
+#     # Add the complete conversation (3 messages) to collection
+#     all_conversations.append(messages_with_image)
+
+# print("First 5 all_conversations examples:")
+# for i in range(min(5, len(all_conversations))):
+#     print(f"\nExample {i}:")
+#     print(all_conversations[i])
 
 # %%
-image, video = process_vision_info(all_conversations)
-for i in range(5):
-    print(image[i])
-    print("-"*100)
-# print(video[0:5])
+# # put a batch in apply_chat_template 
 
-print(type(image))
+# text = processor.apply_chat_template(
+#     all_conversations,
+#     tokenize=False,
+#     add_generation_prompt=False
+# )
 
-# %%
-batch_inputs = processor(
-    text=text,
-    images=image,
-    # videos=all_videos,
-    padding=True,
-    truncation=False,
-    return_tensors="pt"
-)
+# for i in range(2):
+#     print(text[i])
+#     print("-"*100)
+
+# print(type(text))
 
 # %%
-print(f'batch_inputs: \n {batch_inputs["input_ids"][0:2, -10:]}') ## First 2 samples, last 10 tokens
-print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, -10:]}') ## 1=real token, 0=padding
+# image, video = process_vision_info(all_conversations)
+# for i in range(5):
+#     print(image[i])
+#     print("-"*100)
+# # print(video[0:5])
 
-print(f'batch_inputs["input_ids"]: \n {batch_inputs["input_ids"][0:2, 0:10]}') # First 2 samples, first 10 tokens
-print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, 0:10]}')
+# print(type(image))
 
-print("-"*100)
+# %%
+# batch_inputs = processor(
+#     text=text,
+#     images=image,
+#     # videos=all_videos,
+#     padding=True,
+#     truncation=False,
+#     return_tensors="pt"
+# )
 
-print("Input shapes:")
-for key, value in batch_inputs.items():
-    if hasattr(value, 'shape'):
-        print(f"{key}: {value.shape}")
+# %%
+# print(f'batch_inputs: \n {batch_inputs["input_ids"][0:2, -10:]}') ## First 2 samples, last 10 tokens
+# print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, -10:]}') ## 1=real token, 0=padding
 
-print("-"*100)
-print(f'type(batch_inputs): \n {type(batch_inputs)}')
+# print(f'batch_inputs["input_ids"]: \n {batch_inputs["input_ids"][0:2, 0:10]}') # First 2 samples, first 10 tokens
+# print(f'batch_inputs["attention_mask"]: \n {batch_inputs["attention_mask"][0:2, 0:10]}')
+
+# print("-"*100)
+
+# print("Input shapes:")
+# for key, value in batch_inputs.items():
+#     if hasattr(value, 'shape'):
+#         print(f"{key}: {value.shape}")
+
+# print("-"*100)
+# print(f'type(batch_inputs): \n {type(batch_inputs)}')
 
 # %%
 # # Final Code starting from Apply Chat template 
@@ -1864,13 +1905,13 @@ print(f'type(batch_inputs): \n {type(batch_inputs)}')
 # )
 
 # %%
-# __init__ method
-print(
-    f"processor.tokenizer.pad_token_id: {processor.tokenizer.pad_token_id}\n"
-    f"processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_start|>')}\n"
-    f"processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_end|>')}\n"
-    f"processor.tokenizer.convert_tokens_to_ids('<|image_pad|>'): {processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')}"
-)
+# # __init__ method
+# print(
+#     f"processor.tokenizer.pad_token_id: {processor.tokenizer.pad_token_id}\n"
+#     f"processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_start|>')}\n"
+#     f"processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'): {processor.tokenizer.convert_tokens_to_ids('<|vision_end|>')}\n"
+#     f"processor.tokenizer.convert_tokens_to_ids('<|image_pad|>'): {processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')}"
+# )
 
 # %% id="dxkXZuUkvy8j"
 import gc
@@ -1925,10 +1966,11 @@ bnb_config = BitsAndBytesConfig(
 model_id = "Qwen/Qwen2-VL-7B-Instruct"
 
 # Load the model with 4-bit quantization
+# Use "balanced" to evenly distribute model across available GPUs
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     model_id,
     quantization_config=bnb_config,
-    device_map="auto",
+    device_map="balanced",  # Changed from "auto" to evenly distribute across GPUs
     torch_dtype=torch.bfloat16,
     attn_implementation="flash_attention_2",  # Use Flash Attention 2 for efficiency
     trust_remote_code=True,
@@ -2026,17 +2068,18 @@ training_args = SFTConfig(
     # Output and logging - SAVE TO SSD TO AVOID HOME DIRECTORY QUOTA
     output_dir="/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora",
     logging_dir="/ssd1/zhuoyuan/vlm_outputs/logs",
-    logging_steps=10,
+    logging_steps=10,  # Show training loss every 10 steps for frequent updates
     
     # Training hyperparameters
     num_train_epochs=3,
     per_device_train_batch_size=1,  # Adjust based on GPU memory
     per_device_eval_batch_size=1,
-    gradient_accumulation_steps=16,  # Effective batch size = 2 * 8 = 16
+    gradient_accumulation_steps=8,  # Back to 8 for larger effective batch size (2 * 1 * 8 = 16)
     gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
+    gradient_checkpointing_kwargs={"use_reentrant": False},  # Better memory efficiency
     
     # Learning rate and optimization
-    learning_rate=2e-4,
+    learning_rate=1e-5,  # Reduced from 2e-4 - more stable for vision models
     warmup_steps=100,
     lr_scheduler_type="cosine",
     optim="adamw_torch",
@@ -2048,6 +2091,8 @@ training_args = SFTConfig(
     bf16=True,  # Use bfloat16 precision
     tf32=True,  # Enable TF32 on Ampere GPUs
     dataloader_num_workers=0,
+    # dataloader_num_workers=2,  # Use 2 workers for better data loading
+    # dataloader_pin_memory=True,  # Pin memory for faster GPU transfer
     
     # Evaluation and saving
     eval_strategy="steps",
@@ -2437,26 +2482,190 @@ class collate_fn_fixed_1:
 print("✅ Fixed collate_fn_1 created")
 
 # %%
-# Use the improved collator
-collate_fn = collate_fn_fixed_1
-print("✅ Using collate_fn_fixed_1 for training")
+# Fixed collate_fn with Flash Attention dtype fix for cu_seqlens
+class collate_fn_fixed_fixed1:
+    """
+    FIXED VERSION 2: Fixes Flash Attention cu_seqlens_q dtype error.
+    
+    The error "RuntimeError: cu_seqlens_q must have dtype int32" occurs because
+    Flash Attention expects cumulative sequence length tensors to be int32,
+    but they're created as int64 internally.
+    
+    This collator patches the Flash Attention forward pass to ensure cu_seqlens
+    tensors have the correct dtype.
+    """
+    
+    def __init__(self, processor, model):
+        self.processor = processor
+        self.model = model
+        self.masked_token_ids = [
+            self.processor.tokenizer.pad_token_id,
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+        ]
+        
+        # Apply monkey patch to fix cu_seqlens dtype issue
+        self._patch_flash_attention()
+    
+    def _patch_flash_attention(self):
+        """Monkey-patch Flash Attention to fix cu_seqlens dtype."""
+        import flash_attn.flash_attn_interface as flash_interface
+        
+        # Store original _flash_attn_varlen_forward function
+        original_flash_varlen_forward = flash_interface._flash_attn_varlen_forward
+        
+        def patched_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k, 
+                                        max_seqlen_q, max_seqlen_k, *args, **kwargs):
+            # Convert cu_seqlens to int32 if needed
+            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+            
+            # Call original function with fixed dtypes
+            return original_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                                max_seqlen_q, max_seqlen_k, *args, **kwargs)
+        
+        # Replace the internal _flash_attn_varlen_forward function
+        flash_interface._flash_attn_varlen_forward = patched_flash_varlen_forward
+        
+        # Also patch the FlashAttnVarlenFunc.forward method
+        from flash_attn.flash_attn_interface import FlashAttnVarlenFunc
+        original_forward = FlashAttnVarlenFunc.forward
+        
+        @staticmethod
+        def patched_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k, 
+                          max_seqlen_q, max_seqlen_k, *args):
+            # Convert cu_seqlens to int32 if needed
+            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+            
+            # Call original forward with fixed dtypes
+            return original_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                   max_seqlen_q, max_seqlen_k, *args)
+        
+        FlashAttnVarlenFunc.forward = patched_forward
+        print("✅ Applied Flash Attention cu_seqlens dtype patch (both _flash_attn_varlen_forward and FlashAttnVarlenFunc.forward)")
+    
+    def __call__(self, batch):
+        # Extract messages and images from each sample
+        messages_list = [sample['messages'] for sample in batch]
+        images_list = [sample.get('image', None) for sample in batch]
+        
+        # Filter out samples without images
+        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+        if not valid_pairs:
+            raise ValueError("Batch contains no valid images.")
+        
+        messages_list, images_list = zip(*valid_pairs)
+        messages_list = list(messages_list)
+        images_list = list(images_list)
+        
+        all_conversations = []
+        
+        for messages, image in zip(messages_list, images_list):
+            messages_with_image = []
+            for msg in messages:
+                msg_copy = {'role': msg['role'], 'content': []}
+                
+                for content_item in msg['content']:
+                    if content_item is None:
+                        continue
+                    
+                    if content_item.get('type') == 'text':
+                        text_value = content_item.get('text')
+                        if text_value is not None and text_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'text',
+                                'text': text_value
+                            })
+                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                        image_value = content_item.get('image')
+                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image
+                            })
+                        elif image_value and image_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image_value
+                            })
+                
+                if msg_copy['content']:
+                    messages_with_image.append(msg_copy)
+            
+            all_conversations.append(messages_with_image)
+        
+        # Apply chat template
+        text = self.processor.apply_chat_template(
+            all_conversations,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        
+        # Process vision info
+        image, video = process_vision_info(all_conversations)
+        
+        # Process texts and images together
+        batch_inputs = self.processor(
+            text=text,
+            images=image,
+            padding=True,
+            truncation=False,
+            return_tensors="pt"
+        )
+        
+        # Ensure correct dtypes for all tensors
+        if 'input_ids' in batch_inputs:
+            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
+        
+        if 'attention_mask' in batch_inputs:
+            batch_inputs['attention_mask'] = batch_inputs['attention_mask'].to(torch.long)
+        
+        # Create labels with masking
+        labels = batch_inputs["input_ids"].clone()
+        for token_id in self.masked_token_ids:
+            labels[labels == token_id] = -100
+        batch_inputs["labels"] = labels
+        
+        return batch_inputs
+
+print("✅ Fixed collate_fn_fixed_fixed1 created with Flash Attention dtype patch")
 
 # %%
-model_id = "Qwen/Qwen2-VL-7B-Instruct"
-model = Qwen2VLForConditionalGeneration.from_pretrained(
-    model_id,
-    torch_dtype=torch.bfloat16, # original training precision stored in config.json for this model is bfloat16, so "auto" = torch.bfloat16 for this model
-    attn_implementation="flash_attention_2",
-    device_map='auto'
-)
-processor = Qwen2VLProcessor.from_pretrained(model_id) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
+# Use the improved collator
+collate_fn = collate_fn_fixed_fixed1
+print("✅ Using collate_fn_fixed_fixed1 for training")
 
-DataCollator_fn_fixed_1 = collate_fn_fixed_1(processor, model)
+# %%
+# IMPORTANT: Commented out duplicate model loading to prevent OOM errors
+# The model and processor are already loaded above (lines 1928-1946) with 4-bit quantization
+# Loading the model again here would:
+# 1. Consume double the GPU memory (causing OOM errors)
+# 2. Load WITHOUT quantization (full bfloat16), using much more memory
+# 3. Override the already configured quantized model
+#
+# Original code (COMMENTED OUT - DO NOT UNCOMMENT):
+# model_id = "Qwen/Qwen2-VL-7B-Instruct"
+# model = Qwen2VLForConditionalGeneration.from_pretrained(
+#     model_id,
+#     torch_dtype=torch.bfloat16,
+#     attn_implementation="flash_attention_2",
+#     device_map='auto'
+# )
+# processor = Qwen2VLProcessor.from_pretrained(model_id)
+
+# Use the already loaded model and processor from above
+DataCollator_fn_fixed_fixed1 = collate_fn_fixed_fixed1(processor, model)
 
 
 test_dataset = train_dataset_formatted.select(range(2))
 test_batch = [test_dataset[i] for i in range(len(test_dataset))]
-x = DataCollator_fn_fixed_1(test_batch)
+x = DataCollator_fn_fixed_fixed1(test_batch)
 print(x)
 print(type(x))  # should be dict
 
@@ -2510,12 +2719,17 @@ from trl import SFTTrainer
 # 1. Called prepare_model_for_kbit_training()
 # 2. Applied get_peft_model() with LoRA config
 # So we DON'T pass peft_config to SFTTrainer (model is already a PEFT model)
+
+# CRITICAL: We're NOT using gradient checkpointing at all
+# It breaks gradient flow with LoRA + quantization
+# training_args.gradient_checkpointing is already False in the config
+
 trainer = SFTTrainer(
     model=model,  # Already a PEFT model with LoRA adapters
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
-    data_collator=DataCollator_fn_fixed_1,  # Using the FIXED collate_fn that prevents out-of-range labels
+    data_collator=DataCollator_fn_fixed_fixed1,  # Using the FIXED collate_fn with Flash Attention dtype patch
     processing_class=processor,  # Use full processor (not just tokenizer) for consistency
     # Note: NO peft_config here since we already applied get_peft_model manually
 )
@@ -2534,7 +2748,6 @@ print(f"Number of training steps: {len(train_dataset_formatted) // (training_arg
 # %% id="k_jk-U7ULYtA"
 
 # Launch training
-print("\nStarting training...")
 trainer.train()
 
 # Save the final model
@@ -2574,7 +2787,7 @@ base_model_id = "Qwen/Qwen2-VL-7B-Instruct"
 model_finetuned = Qwen2VLForConditionalGeneration.from_pretrained(
     base_model_id,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
+    device_map="balanced",  # Use balanced for multi-GPU consistency
     attn_implementation="flash_attention_2",
 )
 
@@ -2867,7 +3080,7 @@ print("\nLoading base model for comparison...")
 base_model = Qwen2VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2-VL-7B-Instruct",
     torch_dtype=torch.bfloat16,
-    device_map="auto",
+    device_map="balanced",  # Use balanced for multi-GPU consistency
     attn_implementation="flash_attention_2",
 )
 base_processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
