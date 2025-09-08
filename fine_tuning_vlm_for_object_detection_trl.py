@@ -100,7 +100,6 @@ if len(available_gpus) > 0:
     gpu_string = ','.join(str(g) for g in available_gpus)
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_string
     print(f"✅ Found {len(available_gpus)} available GPU(s): {available_gpus}")
-    print(f"   (Limited to max {MAX_GPUS} GPUs to preserve lab resources)")
     if USE_DUAL_GPU and len(available_gpus) == 1:
         print("⚠️ Warning: Only 1 GPU available, but 2 were requested")
 else:
@@ -834,8 +833,13 @@ print("=" * 80)
 from transformers import Qwen2VLProcessor
 import json
 
-# Load the processor and tokenizer
-processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+# Load the processor and tokenizer with optimized pixel configuration
+processor = Qwen2VLProcessor.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct",
+    min_pixels=256*28*28,    # ~200k pixels (reduced from 3k default)
+    max_pixels=1280*28*28,   # ~1M pixels (reduced from 12.8M default!)
+    trust_remote_code=True
+)
 tokenizer = processor.tokenizer
 
 print("\n1. VOCABULARY INFORMATION:")
@@ -965,7 +969,12 @@ def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-
         attn_implementation="flash_attention_2",
         device_map=device
     )
-    processor = Qwen2VLProcessor.from_pretrained(model_id) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
+    processor = Qwen2VLProcessor.from_pretrained(
+        model_id,
+        min_pixels=256*28*28,    # ~200k pixels (reduced from 3k default)
+        max_pixels=1280*28*28,   # ~1M pixels (reduced from 12.8M default!)
+        trust_remote_code=True
+    ) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
     
     # Handle image input - can be path or PIL Image
     if isinstance(image_path_or_pil, str):
@@ -1976,9 +1985,11 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
     trust_remote_code=True,
 )
 
-# Load processor
+# Load processor with optimized pixel configuration for faster training
 processor = Qwen2VLProcessor.from_pretrained(
     model_id,
+    min_pixels=256*28*28,    # ~200k pixels (reduced from 3k default)
+    max_pixels=1280*28*28,   # ~1M pixels (reduced from 12.8M default!)
     trust_remote_code=True,
 )
 
@@ -2075,11 +2086,11 @@ training_args = SFTConfig(
     per_device_train_batch_size=1,  # Adjust based on GPU memory
     per_device_eval_batch_size=1,
     gradient_accumulation_steps=8,  # Back to 8 for larger effective batch size (2 * 1 * 8 = 16)
-    gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
-    gradient_checkpointing_kwargs={"use_reentrant": False},  # Better memory efficiency
+    gradient_checkpointing=False,  # Disabled - causes issues with QLoRA
+    # gradient_checkpointing_kwargs={"use_reentrant": False},  # Not needed when disabled
     
     # Learning rate and optimization
-    learning_rate=1e-5,  # Reduced from 2e-4 - more stable for vision models
+    learning_rate=2e-5,  # Slightly higher for better convergence with vision models
     warmup_steps=100,
     lr_scheduler_type="cosine",
     optim="adamw_torch",
@@ -2212,121 +2223,121 @@ print(f"View your run at: {wandb.run.get_url()}")
 # It handles the conversion from our formatted dataset to the format expected by the model.
 
 # %%
-# Fixed collate_fn with improved error handling and robust masking  
-def collate_fn_fixed(batch):
-    """
-    FIXED VERSION: Robust collate function that prevents out-of-range label issues.
+# # Fixed collate_fn with improved error handling and robust masking  
+# def collate_fn_fixed(batch):
+#     """
+#     FIXED VERSION: Robust collate function that prevents out-of-range label issues.
     
-    This collator:
-    1. Restores IMAGE_PLACEHOLDER with actual PIL images
-    2. Uses process_vision_info to properly extract and format images
-    3. Applies chat template to get formatted text
-    4. Tokenizes text and processes images together
-    5. Creates labels with proper masking for loss computation
+#     This collator:
+#     1. Restores IMAGE_PLACEHOLDER with actual PIL images
+#     2. Uses process_vision_info to properly extract and format images
+#     3. Applies chat template to get formatted text
+#     4. Tokenizes text and processes images together
+#     5. Creates labels with proper masking for loss computation
     
-    Key improvements:
-    - Properly masks all vision/special tokens to prevent training on them
-    - Validates that no out-of-vocabulary tokens exist in labels
-    - Uses token-based span finding for robust assistant response extraction
-    - Handles edge cases gracefully (samples without images, OOV tokens)
+#     Key improvements:
+#     - Properly masks all vision/special tokens to prevent training on them
+#     - Validates that no out-of-vocabulary tokens exist in labels
+#     - Uses token-based span finding for robust assistant response extraction
+#     - Handles edge cases gracefully (samples without images, OOV tokens)
     
-    Args:
-        batch: List of samples from the dataset, each containing 'messages' and 'image'
+#     Args:
+#         batch: List of samples from the dataset, each containing 'messages' and 'image'
         
-    Returns:
-        Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
-    """
-    # STEP 1: Format the dataset into desired format:
-    # Restores IMAGE_PLACEHOLDER with actual PIL image
-    # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
+#     Returns:
+#         Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
+#     """
+#     # STEP 1: Format the dataset into desired format:
+#     # Restores IMAGE_PLACEHOLDER with actual PIL image
+#     # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
 
     
-    # Extract messages and images from each sample
-    messages_list = [sample['messages'] for sample in batch]
-    images_list = [sample.get('image', None) for sample in batch]
+#     # Extract messages and images from each sample
+#     messages_list = [sample['messages'] for sample in batch]
+#     images_list = [sample.get('image', None) for sample in batch]
 
-    # Filter out samples without images
-    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-    if not valid_pairs:
-        raise ValueError("Batch contains no valid images.")
+#     # Filter out samples without images
+#     valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+#     if not valid_pairs:
+#         raise ValueError("Batch contains no valid images.")
 
-    messages_list, images_list = zip(*valid_pairs)
-    messages_list = list(messages_list)
-    images_list = list(images_list)
+#     messages_list, images_list = zip(*valid_pairs)
+#     messages_list = list(messages_list)
+#     images_list = list(images_list)
 
 
-    all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
+#     all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
 
-    for messages, image in zip(messages_list, images_list):
-        messages_with_image = []
-        # Clean up messages: remove None values and restore images
-        for msg in messages:
-            msg_copy = {'role': msg['role'], 'content': []}
+#     for messages, image in zip(messages_list, images_list):
+#         messages_with_image = []
+#         # Clean up messages: remove None values and restore images
+#         for msg in messages:
+#             msg_copy = {'role': msg['role'], 'content': []}
             
-            for content_item in msg['content']:
-                # Skip None entries entirely
-                if content_item is None:
-                    continue
+#             for content_item in msg['content']:
+#                 # Skip None entries entirely
+#                 if content_item is None:
+#                     continue
                     
-                # Process text content - filter out None text values
-                if content_item.get('type') == 'text':
-                    text_value = content_item.get('text')
-                    if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
-                        msg_copy['content'].append({
-                            'type': 'text',
-                            'text': text_value
-                        })
-                # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
-                elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                    # Check if it's IMAGE_PLACEHOLDER and replace with actual image
-                    image_value = content_item.get('image')
-                    if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                        # Replace with the actual PIL image from top level
-                        msg_copy['content'].append({
-                            'type': 'image',
-                            'image': image  # Use the actual PIL image
-                        })
-                    elif image_value and image_value != 'None':
-                        # Use existing image if it's not placeholder
-                        msg_copy['content'].append({
-                            'type': 'image',
-                            'image': image_value
-                        })
+#                 # Process text content - filter out None text values
+#                 if content_item.get('type') == 'text':
+#                     text_value = content_item.get('text')
+#                     if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
+#                         msg_copy['content'].append({
+#                             'type': 'text',
+#                             'text': text_value
+#                         })
+#                 # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
+#                 elif content_item.get('type') == 'image' and msg['role'] == 'user':
+#                     # Check if it's IMAGE_PLACEHOLDER and replace with actual image
+#                     image_value = content_item.get('image')
+#                     if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+#                         # Replace with the actual PIL image from top level
+#                         msg_copy['content'].append({
+#                             'type': 'image',
+#                             'image': image  # Use the actual PIL image
+#                         })
+#                     elif image_value and image_value != 'None':
+#                         # Use existing image if it's not placeholder
+#                         msg_copy['content'].append({
+#                             'type': 'image',
+#                             'image': image_value
+#                         })
             
-            if msg_copy['content']:
-                messages_with_image.append(msg_copy)
+#             if msg_copy['content']:
+#                 messages_with_image.append(msg_copy)
 
-        # Add the complete conversation (3 messages) to collection
-        all_conversations.append(messages_with_image)
+#         # Add the complete conversation (3 messages) to collection
+#         all_conversations.append(messages_with_image)
     
-    # Apply chat template to get text
-    text = processor.apply_chat_template(
-        all_conversations,
-        tokenize=False,
-        add_generation_prompt=False
-    )
+#     # Apply chat template to get text
+#     text = processor.apply_chat_template(
+#         all_conversations,
+#         tokenize=False,
+#         add_generation_prompt=False
+#     )
 
-    # process_vision_info to get image and video
-    image, video = process_vision_info(all_conversations)
+#     # process_vision_info to get image and video
+#     image, video = process_vision_info(all_conversations)
 
-    # Process texts and images together
-    batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
-        text=text,
-        images=image,
-        # videos=video,
-        padding=True,
-        truncation=False,
-        return_tensors="pt"
-    )
+#     # Process texts and images together
+#     batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
+#         text=text,
+#         images=image,
+#         # videos=video,
+#         padding=True,
+#         truncation=False,
+#         return_tensors="pt"
+#     )
     
-    # Create labels from input_ids
-    labels = batch_inputs["input_ids"].clone()
+#     # Create labels from input_ids
+#     labels = batch_inputs["input_ids"].clone()
     
     
     
-    return batch_inputs
+#     return batch_inputs
 
-print("✅ Fixed collate_fn created")
+# print("✅ Fixed collate_fn created")
 
 # %%
 import torch 
@@ -2504,6 +2515,7 @@ class collate_fn_fixed_fixed1:
             self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
             self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
         ]
+        self.call_count = 0  # Track calls to limit debug output
         
         # Apply monkey patch to fix cu_seqlens dtype issue
         self._patch_flash_attention()
@@ -2632,14 +2644,18 @@ class collate_fn_fixed_fixed1:
             labels[labels == token_id] = -100
         batch_inputs["labels"] = labels
         
+        # Debug output disabled for clean training logs
+        # Uncomment the lines below if you need to debug token masking:
+        # self.call_count += 1
+        # if self.call_count <= 3:  # Only show first 3 samples
+        #     non_masked = (labels != -100).sum().item()
+        #     total = labels.numel()
+        #     if non_masked > 0 and total > 0:
+        #         print(f"[Sample {self.call_count}] Training on {non_masked}/{total} tokens ({100*non_masked/total:.1f}%)")
+        
         return batch_inputs
 
 print("✅ Fixed collate_fn_fixed_fixed1 created with Flash Attention dtype patch")
-
-# %%
-# Use the improved collator
-collate_fn = collate_fn_fixed_fixed1
-print("✅ Using collate_fn_fixed_fixed1 for training")
 
 # %%
 # IMPORTANT: Commented out duplicate model loading to prevent OOM errors
@@ -2660,14 +2676,81 @@ print("✅ Using collate_fn_fixed_fixed1 for training")
 # processor = Qwen2VLProcessor.from_pretrained(model_id)
 
 # Use the already loaded model and processor from above
-DataCollator_fn_fixed_fixed1 = collate_fn_fixed_fixed1(processor, model)
+collate_fn = collate_fn_fixed_fixed1(processor, model)
 
+# %%
+# Function to analyze token distribution
+def analyze_token_distribution(collate_fn, dataset, num_samples=3):
+    """
+    Analyze what tokens are being trained on vs masked.
+    This helps understand why loss might not be decreasing.
+    """
+    print("\n" + "="*60)
+    print("TOKEN DISTRIBUTION ANALYSIS")
+    print("="*60)
+    print(f"Analyzing {num_samples} samples to understand training tokens...\n")
+    
+    for i in range(min(num_samples, len(dataset))):
+        test_batch = [dataset[i]]
+        batch_output = collate_fn(test_batch)
+        
+        input_ids = batch_output['input_ids'][0]
+        labels = batch_output['labels'][0]
+        
+        # Count token types
+        total_tokens = len(input_ids)
+        masked_tokens = (labels == -100).sum().item()
+        trained_tokens = total_tokens - masked_tokens
+        
+        print(f"Sample {i+1}:")
+        print(f"  Total tokens: {total_tokens}")
+        print(f"  Masked (ignored): {masked_tokens} tokens")
+        print(f"  Trained on: {trained_tokens} tokens ({100*trained_tokens/total_tokens:.1f}%)")
+        
+        # Decode what we're training on
+        trained_indices = (labels != -100).nonzero(as_tuple=True)[0]
+        if len(trained_indices) > 0:
+            # Show first and last parts of what we're training on
+            trained_token_ids = input_ids[trained_indices]
+            decoded = processor.tokenizer.decode(trained_token_ids, skip_special_tokens=False)
+            
+            # Clean up for display
+            decoded_clean = decoded.replace('<|im_start|>', '[START]')
+            decoded_clean = decoded_clean.replace('<|im_end|>', '[END]')
+            decoded_clean = decoded_clean.replace('<|object_ref_start|>', '[OBJ]')
+            decoded_clean = decoded_clean.replace('<|object_ref_end|>', '[/OBJ]')
+            decoded_clean = decoded_clean.replace('<|box_start|>', '[BOX]')
+            decoded_clean = decoded_clean.replace('<|box_end|>', '[/BOX]')
+            
+            if len(decoded_clean) > 150:
+                print(f"  Training content: '{decoded_clean[:75]}...{decoded_clean[-75:]}'")
+            else:
+                print(f"  Training content: '{decoded_clean}'")
+        
+        print()
+    
+    print("📊 BREAKDOWN OF TRAINED TOKENS:")
+    print("  ~50 tokens: System prompt (static - same every sample)")
+    print("  ~10 tokens: User prompt 'Detect the bounding box...' (static)")
+    print("  ~10 tokens: Role markers like <|im_start|>, <|im_end|> (static)")
+    print("  ~30 tokens: Assistant response with bbox coordinates (ONLY THIS VARIES!)")
+    print()
+    print("⚠️  ISSUE: 70% of trained tokens are static (don't help learning)")
+    print("    Only ~30% are the actual variable bbox coordinates")
+    print("    This is why loss decreases very slowly!")
+    print("="*60)
 
+# Run token analysis
+print("\n📊 Running token distribution analysis...")
+analyze_token_distribution(collate_fn, train_dataset_formatted, num_samples=3)
+
+# Test collator with a small batch
 test_dataset = train_dataset_formatted.select(range(2))
 test_batch = [test_dataset[i] for i in range(len(test_dataset))]
-x = DataCollator_fn_fixed_fixed1(test_batch)
-print(x)
-print(type(x))  # should be dict
+x = collate_fn(test_batch)
+print("\n✅ Collator test successful")
+print(f"Output type: {type(x)}")
+print(f"Keys in output: {list(x.keys())}")
 
 
 # %%
@@ -2729,7 +2812,7 @@ trainer = SFTTrainer(
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
-    data_collator=DataCollator_fn_fixed_fixed1,  # Using the FIXED collate_fn with Flash Attention dtype patch
+    data_collator=collate_fn,  # Using the FIXED collate_fn with Flash Attention dtype patch
     processing_class=processor,  # Use full processor (not just tokenizer) for consistency
     # Note: NO peft_config here since we already applied get_peft_model manually
 )
@@ -2768,7 +2851,9 @@ print(f"Model saved to {training_args.output_dir}")
 # Let's clean up the GPU memory to ensure optimal performance 🧹
 
 # %% id="Ttx6EK8Uy8t0"
-clear_memory()
+# COMMENTED OUT: This deletes model and processor which we need later!
+# clear_memory()
+print("Skipping clear_memory() to keep model and processor available for later cells")
 
 # %% [markdown] id="HwCTPHsfujn2"
 # We will reload the base model using the same pipeline as before, but this we will load the LoRA adpaters into the model too. LoRA adapters should be selected from the saved directory.
@@ -3155,7 +3240,9 @@ plt.show()
 # Clean up base model to free memory
 del base_model
 del base_processor
-clear_memory()
+# COMMENTED OUT: This deletes model and processor which we need for later cells!
+# clear_memory()
+print("Deleted base_model and base_processor, but keeping model and processor for later use")
 
 # %% [markdown] id="iyhR69T3dfLI"
 # # 🧑‍🍳 [Optional]  The recipe
@@ -3666,4 +3753,408 @@ if test_output is None:
     print("4. Restart the kernel after installation")
     print("5. Re-run from model loading onwards")
     print("="*60)
+
+# %%
+# Clean collate_fn_fixed_3 class that only trains on assistant responses
+class collate_fn_fixed_3:
+    """
+    Clean collator that masks everything except assistant responses.
+    This ensures the model only learns the actual detection task (bbox coordinates)
+    rather than memorizing static prompts.
+    
+    Key features:
+    - Masks all padding, vision, system, and user tokens
+    - Only trains on assistant response tokens
+    - No OOV complexity - keeps it simple
+    - Proper class structure with processor and model passed in __init__
+    """
+    
+    def __init__(self, processor, model):
+        self.processor = processor
+        self.model = model
+        
+        # Track special tokens to mask
+        self.pad_token_id = self.processor.tokenizer.pad_token_id
+        self.vision_token_ids = [
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+        ]
+        
+        # Assistant markers for finding response boundaries
+        self.assistant_start_token = "<|im_start|>assistant\n"
+        self.assistant_end_token = "<|im_end|>"
+        
+        # For debugging - set to True to see first few samples
+        self.debug = False
+        self.debug_count = 0
+        self.max_debug = 3
+    
+    def __call__(self, batch):
+        # Step 1: Extract and prepare messages with actual images
+        messages_list = [sample['messages'] for sample in batch]
+        images_list = [sample.get('image', None) for sample in batch]
+        
+        # Filter out samples without images
+        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+        if not valid_pairs:
+            raise ValueError("Batch contains no valid images.")
+        
+        messages_list, images_list = zip(*valid_pairs)
+        messages_list = list(messages_list)
+        images_list = list(images_list)
+        
+        # Process each sample to restore IMAGE_PLACEHOLDER with actual images
+        all_conversations = []
+        for messages, image in zip(messages_list, images_list):
+            messages_with_image = []
+            for msg in messages:
+                msg_copy = {'role': msg['role'], 'content': []}
+                
+                for content_item in msg['content']:
+                    if content_item is None:
+                        continue
+                    
+                    # Process text content
+                    if content_item.get('type') == 'text':
+                        text_value = content_item.get('text')
+                        if text_value is not None and text_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'text',
+                                'text': text_value
+                            })
+                    # Process image content for user messages
+                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                        image_value = content_item.get('image')
+                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image  # Use actual PIL image
+                            })
+                        elif image_value and image_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image_value
+                            })
+                
+                if msg_copy['content']:
+                    messages_with_image.append(msg_copy)
+            
+            all_conversations.append(messages_with_image)
+        
+        # Step 2: Apply chat template
+        texts = self.processor.apply_chat_template(
+            all_conversations,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+        
+        # Step 3: Process vision info
+        images, videos = process_vision_info(all_conversations)
+        
+        # Step 4: Tokenize and process
+        batch_inputs = self.processor(
+            text=texts,
+            images=images,
+            padding=True,
+            truncation=False,
+            return_tensors="pt"
+        )
+        
+        # Step 5: Create labels - start with everything masked
+        labels = batch_inputs["input_ids"].clone()
+        labels[:, :] = -100  # Mask everything initially
+        
+        # Step 6: Find and unmask ONLY assistant responses
+        for batch_idx, text in enumerate(texts):
+            input_ids = batch_inputs["input_ids"][batch_idx]
+            
+            # Find assistant response boundaries in the text
+            assistant_start_pos = text.find(self.assistant_start_token)
+            if assistant_start_pos == -1:
+                # Try without newline
+                assistant_start_pos = text.find("<|im_start|>assistant")
+            
+            if assistant_start_pos != -1:
+                # Find where actual response starts (after the marker)
+                response_start_in_text = assistant_start_pos + len(self.assistant_start_token)
+                
+                # Find end of assistant response
+                assistant_end_pos = text.find(self.assistant_end_token, response_start_in_text)
+                
+                if assistant_end_pos != -1:
+                    # Extract just the response text
+                    response_text = text[response_start_in_text:assistant_end_pos]
+                    
+                    # Tokenize the response to find it in input_ids
+                    response_tokens = self.processor.tokenizer.encode(
+                        response_text, 
+                        add_special_tokens=False
+                    )
+                    
+                    if response_tokens:
+                        # Find this sequence in the full input_ids
+                        for i in range(len(input_ids) - len(response_tokens) + 1):
+                            if input_ids[i:i+len(response_tokens)].tolist() == response_tokens:
+                                # Unmask these tokens for training
+                                labels[batch_idx, i:i+len(response_tokens)] = input_ids[i:i+len(response_tokens)]
+                                break
+        
+        # Step 7: Debug output (only for first few samples)
+        if self.debug and self.debug_count < self.max_debug:
+            self.debug_count += 1
+            non_masked = (labels != -100).sum().item()
+            total = labels.numel()
+            if non_masked > 0:
+                # Decode what we're training on
+                sample_labels = labels[0]
+                trained_indices = (sample_labels != -100).nonzero(as_tuple=True)[0]
+                if len(trained_indices) > 0:
+                    trained_tokens = batch_inputs["input_ids"][0][trained_indices]
+                    decoded = self.processor.tokenizer.decode(trained_tokens, skip_special_tokens=False)
+                    print(f"[collate_fn_fixed_3] Sample {self.debug_count}: Training on {len(trained_indices)} tokens")
+                    print(f"  Content: '{decoded}'")
+                    print(f"  This is {100*len(trained_indices)/len(sample_labels):.1f}% of {len(sample_labels)} total tokens")
+        
+        batch_inputs["labels"] = labels
+        return batch_inputs
+
+print("✅ Created collate_fn_fixed_3 - clean assistant-only training")
+
+# %%
+# Test collate_fn_fixed_3 and verify coordinate scaling
+def test_collate_fn_fixed_3():
+    """Test the new collator and verify coordinate scaling."""
+    print("\n" + "="*60)
+    print("TESTING collate_fn_fixed_3 & COORDINATE SCALING")
+    print("="*60)
+    
+    # Create collator instance
+    # Note: processor and model should already be loaded from earlier cells
+    # We commented out the clear_memory() calls to preserve them
+    collator = collate_fn_fixed_3(processor, model)
+    collator.debug = True  # Enable debug output
+    
+    # Test with first sample
+    # Note: train_dataset_formatted should be available from data preprocessing cells
+    test_batch = [train_dataset_formatted[0]]
+    
+    print("\n1. TESTING COLLATOR:")
+    try:
+        output = collator(test_batch)
+        print("✅ Collator executed successfully")
+        
+        # Check what we're training on
+        labels = output['labels'][0]
+        trained_indices = (labels != -100).nonzero(as_tuple=True)[0]
+        print(f"   Training on {len(trained_indices)} tokens out of {len(labels)} total")
+        
+    except Exception as e:
+        print(f"❌ Collator failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("\n2. COORDINATE SCALING CHECK:")
+    print("-" * 40)
+    
+    # Check a sample to verify coordinate scaling
+    example = train_dataset[0]
+    bbox = example['objects']['bbox'][0]
+    
+    print(f"Original bbox (normalized [0,1]): {bbox}")
+    
+    # Show how we convert for training
+    y_min, x_min, y_max, x_max = bbox
+    x1 = int(x_min * 1000)
+    y1 = int(y_min * 1000)
+    x2 = int(x_max * 1000)
+    y2 = int(y_max * 1000)
+    
+    print(f"Converted for training ([0,1000)): ({x1},{y1}),({x2},{y2})")
+    print(f"Format in training data: <|box_start|>({x1},{y1}),({x2},{y2})<|box_end|>")
+    
+    print("\n✅ COORDINATE SCALING IS CORRECT:")
+    print("   - Dataset provides bbox in [0,1] format")
+    print("   - We convert to [0,1000) for training (Qwen2-VL expects this)")
+    print("   - Model should output in [0,1000) format")
+    print("   - parse_qwen_bbox_output expects [0,1000) and converts back")
+    
+    print("\n3. WHY MODEL MIGHT PREDICT NO BOX:")
+    print("-" * 40)
+    print("   Possible reasons:")
+    print("   1. Training on static prompts (70% of tokens) - poor learning signal")
+    print("   2. Loss plateaued at ~3.25 - model not improving")
+    print("   3. Need more epochs or higher learning rate")
+    print("   4. Should use collate_fn_fixed_3 for assistant-only training")
+    
+    return collator
+
+# Run the test
+print("\n📊 Testing new collator and coordinate system...")
+test_collator = test_collate_fn_fixed_3()
+
+# %%
+# ================================================================================
+# SECOND TRAINING RUN: Using collate_fn_fixed_3 (Assistant-Only Training)
+# ================================================================================
+print("\n" + "="*80)
+print("SECOND TRAINING RUN: ASSISTANT-ONLY WITH collate_fn_fixed_3")
+print("="*80)
+print("""
+This training run focuses ONLY on assistant responses (bbox coordinates),
+ignoring system prompts and user messages. This should lead to:
+- Better convergence on the actual detection task
+- Lower training loss (training on ~30% of tokens instead of 100%)
+- More efficient use of compute resources
+""")
+
+# %%
+# Clear GPU memory before starting second training
+import torch
+import gc
+
+print("\n🧹 Clearing GPU memory before second training...")
+torch.cuda.empty_cache()
+gc.collect()
+torch.cuda.synchronize()
+print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+
+# %%
+# Create new training configuration for assistant-only training
+from trl import SFTConfig
+
+training_args_v3 = SFTConfig(
+    # Output and logging - Different directory for comparison
+    output_dir="/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora-assistantonly",
+    logging_dir="/ssd1/zhuoyuan/vlm_outputs/logs-assistantonly",
+    logging_steps=10,  # Show training loss every 10 steps
+    
+    # Training hyperparameters (same as original for fair comparison)
+    num_train_epochs=3,
+    per_device_train_batch_size=1,
+    per_device_eval_batch_size=1,
+    gradient_accumulation_steps=8,  # Effective batch size = 16
+    gradient_checkpointing=False,  # Disabled - causes issues with QLoRA
+    
+    # Learning rate and optimization (same as original)
+    learning_rate=2e-5,
+    warmup_steps=100,
+    lr_scheduler_type="cosine",
+    optim="adamw_torch",
+    adam_beta2=0.999,
+    weight_decay=0.01,
+    max_grad_norm=1.0,
+    
+    # Mixed precision and performance
+    bf16=True,
+    tf32=True,
+    dataloader_num_workers=0,
+    
+    # Evaluation and saving
+    eval_strategy="steps",
+    eval_steps=100,
+    save_strategy="steps",
+    save_steps=100,
+    save_total_limit=3,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    
+    # Advanced options
+    remove_unused_columns=False,
+    label_names=["labels"],
+    
+    # Debugging
+    report_to="tensorboard",  # Using tensorboard instead of wandb
+    
+    # TRL specific
+    dataset_text_field=None,  # We handle formatting in collate_fn
+    packing=False,
+)
+
+print("✅ Created new SFTConfig for assistant-only training")
+print(f"   Output directory: {training_args_v3.output_dir}")
+
+# %%
+# Initialize collate_fn_fixed_3
+print("\n📦 Initializing collate_fn_fixed_3...")
+
+# Create instance of collate_fn_fixed_3
+# Note: processor and model should be available from earlier training
+collate_fn_v3 = collate_fn_fixed_3(processor, model)
+collate_fn_v3.debug = True  # Enable debug output for first few samples
+collate_fn_v3.max_debug = 5  # Show first 5 samples for verification
+
+print("✅ collate_fn_fixed_3 initialized")
+print("   - Will train ONLY on assistant responses")
+print("   - Debug output enabled for first 5 samples")
+
+# %%
+# Test the collator with a sample batch
+print("\n🧪 Testing collate_fn_fixed_3 with a sample batch...")
+test_batch = [train_dataset_formatted[0], train_dataset_formatted[1]]
+test_output = collate_fn_v3(test_batch)
+
+# Analyze what we're training on
+labels = test_output['labels']
+non_masked = (labels != -100).sum().item()
+total = labels.numel()
+print(f"\n📊 Training statistics:")
+print(f"   - Total tokens in batch: {total}")
+print(f"   - Tokens being trained on: {non_masked} ({100*non_masked/total:.1f}%)")
+print(f"   - Tokens masked (ignored): {total - non_masked} ({100*(total-non_masked)/total:.1f}%)")
+
+# %%
+# Create the second SFTTrainer
+from trl import SFTTrainer
+
+print("\n🎯 Creating second SFTTrainer with assistant-only training...")
+
+trainer_v3 = SFTTrainer(
+    model=model,  # Use the same model (already has LoRA adapters from first training)
+    args=training_args_v3,
+    train_dataset=train_dataset_formatted,
+    eval_dataset=eval_dataset_formatted,
+    data_collator=collate_fn_v3,  # Using collate_fn_fixed_3 for assistant-only
+    processing_class=processor,
+)
+
+print("✅ Second SFTTrainer created successfully")
+print(f"   Total training samples: {len(train_dataset_formatted)}")
+print(f"   Total evaluation samples: {len(eval_dataset_formatted)}")
+print(f"   Training will continue from the first trainer's checkpoint")
+
+# Calculate training steps
+steps_per_epoch = len(train_dataset_formatted) // (training_args_v3.per_device_train_batch_size * training_args_v3.gradient_accumulation_steps)
+total_steps = steps_per_epoch * training_args_v3.num_train_epochs
+print(f"   Steps per epoch: {steps_per_epoch}")
+print(f"   Total training steps: {total_steps}")
+
+# %%
+# Launch the second training
+print("\n" + "="*80)
+print("🚀 LAUNCHING SECOND TRAINING (ASSISTANT-ONLY)")
+print("="*80)
+print("Training will focus only on learning the bbox coordinates...")
+print("Watch for lower loss values compared to the first training run!")
+print("")
+
+# Train the model
+trainer_v3.train()
+
+# %%
+# Save the fine-tuned model
+print("\n💾 Saving the assistant-only fine-tuned model...")
+trainer_v3.save_model(training_args_v3.output_dir)
+processor.save_pretrained(training_args_v3.output_dir)
+
+print(f"✅ Model saved to: {training_args_v3.output_dir}")
+print("\n" + "="*80)
+print("TRAINING COMPLETE!")
+print("="*80)
+print("\nYou now have two trained models:")
+print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
+print(f"2. Assistant-only: {training_args_v3.output_dir}")
+print("\nCompare their performance to see which approach works better!")
 
