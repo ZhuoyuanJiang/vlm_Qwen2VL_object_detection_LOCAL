@@ -949,7 +949,7 @@ from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from qwen_vl_utils import vision_process
 from qwen_vl_utils import process_vision_info
 
-def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-Instruct", device="cuda"):
+def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-Instruct", device= "cuda" if torch.cuda.is_available() else "cpu"):
     """
     Run inference with Qwen2-VL model.
     
@@ -975,6 +975,9 @@ def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-
         max_pixels=1280*28*28,   # ~1M pixels (reduced from 12.8M default!)
         trust_remote_code=True
     ) # Or use AutoProcessor.from_pretrained(model_id), but in this case Qwen2VLProcessor is more explicit for demonstration purpose
+    
+    # Set model to evaluation mode for consistent inference
+    model.eval()
     
     # Handle image input - can be path or PIL Image
     if isinstance(image_path_or_pil, str):
@@ -1002,7 +1005,9 @@ def run_qwen2vl_inference(image_path_or_pil, prompt, model_id="Qwen/Qwen2-VL-7B-
     
     # Apply chat template to format the conversation
     text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+        messages, 
+        tokenize=False, #  if tokenize=True, the text will be tokenized and the tokens will be returned. if tokenize=False, the text will be returned as is.
+        add_generation_prompt=True # adds assitant's token to the end of the text to prompts the model to generate response 
     )
     
     # Process vision information (handles image resizing, patching, etc.)
@@ -1142,14 +1147,16 @@ def parse_qwen_bbox_output(model_output):
     matches = re.findall(pattern_no_tokens, model_output)
     
     if matches:
-        # Usually just one detection when no special tokens
-        match = matches[0]
-        object_name = match[0].strip()
-        x1, y1, x2, y2 = int(match[1]), int(match[2]), int(match[3]), int(match[4])
-        return {
-            'object': object_name,
-            'bbox': [x1, y1, x2, y2]
-        }
+        # Can handle multiple detections
+        results = []
+        for match in matches:
+            object_name = match[0].strip()
+            x1, y1, x2, y2 = int(match[1]), int(match[2]), int(match[3]), int(match[4])
+            results.append({
+                'object': object_name,
+                'bbox': [x1, y1, x2, y2]
+            })
+        return results[0] if len(results) == 1 else results
     
     return None  # No valid bbox found
 
@@ -1378,6 +1385,173 @@ if parsed_nutrition:
 
 else:
     print("\nFailed to parse bbox - the model likely couldn't detect the nutrition table.")
+
+# %%
+# Find and visualize examples with multiple bounding boxes (2 and 3 bboxes)
+print("\n" + "=" * 60)
+print("FINDING EXAMPLES WITH MULTIPLE BOUNDING BOXES")
+print("=" * 60)
+
+# Find examples with 2 and 3 bounding boxes
+examples_with_2_bboxes = []
+examples_with_3_bboxes = []
+
+for idx, example in enumerate(train_dataset):
+    num_bboxes = len(example['objects']['bbox'])
+    if num_bboxes == 2 and len(examples_with_2_bboxes) < 2:
+        examples_with_2_bboxes.append(idx)
+    elif num_bboxes == 3 and len(examples_with_3_bboxes) < 2:
+        examples_with_3_bboxes.append(idx)
+    
+    # Stop searching once we have enough examples
+    if len(examples_with_2_bboxes) >= 2 and len(examples_with_3_bboxes) >= 2:
+        break
+
+print(f"\n📦 Examples with 2 bounding boxes: {examples_with_2_bboxes}")
+print(f"📦 Examples with 3 bounding boxes: {examples_with_3_bboxes}")
+
+# %%
+# Visualize examples with 2 bounding boxes
+print("\n" + "=" * 60)
+print("VISUALIZING EXAMPLES WITH 2 BOUNDING BOXES")
+print("=" * 60)
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+
+for i, example_idx in enumerate(examples_with_2_bboxes):
+    print(f"\n--- Example {i+1}: Dataset index #{example_idx} ---")
+    example = train_dataset[example_idx]
+    image = example['image']
+    bboxes = example['objects']['bbox']
+    categories = example['objects']['category_name']
+    
+    print(f"Image size: {image.size}")
+    print(f"Number of bboxes: {len(bboxes)}")
+    print(f"Categories: {categories}")
+    
+    # Run inference
+    print("\nRunning inference...")
+    model_response = run_qwen2vl_inference(
+        image,
+        "Detect the bounding box of the nutrition table."
+    )
+    print(f"Model response: {model_response}")
+    
+    # Parse the output
+    parsed_bboxes = parse_qwen_bbox_output(model_response)
+    print(f"Parsed bboxes: {parsed_bboxes}")
+    
+    # Create visualization
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Left: Ground truth (all bboxes)
+    axes[0].imshow(image)
+    axes[0].set_title(f"Ground Truth - {len(bboxes)} boxes (Green)", fontsize=14)
+    axes[0].axis('off')
+    
+    # Draw all ground truth bboxes
+    pil_width, pil_height = image.size
+    for bbox_idx, (bbox, category) in enumerate(zip(bboxes, categories)):
+        # OpenFoodFacts format: [y_min, x_min, y_max, x_max]
+        y_min, x_min, y_max, x_max = bbox
+        gt_x1 = int(x_min * pil_width)
+        gt_y1 = int(y_min * pil_height)
+        gt_x2 = int(x_max * pil_width)
+        gt_y2 = int(y_max * pil_height)
+        
+        rect = Rectangle((gt_x1, gt_y1), gt_x2-gt_x1, gt_y2-gt_y1,
+                        linewidth=3, edgecolor='green', facecolor='none')
+        axes[0].add_patch(rect)
+        # Add label
+        axes[0].text(gt_x1, gt_y1-5, f"Box {bbox_idx+1}: {category}", 
+                    color='green', fontsize=10, weight='bold')
+    
+    # Right: Model prediction
+    if parsed_bboxes:
+        img_with_pred = visualize_bbox_on_image(image, parsed_bboxes, normalize_coords=True)
+        axes[1].imshow(img_with_pred)
+        num_pred = len(parsed_bboxes) if isinstance(parsed_bboxes, list) else 1
+        axes[1].set_title(f"Model Prediction - {num_pred} box(es) (Red)", fontsize=14)
+    else:
+        axes[1].imshow(image)
+        axes[1].set_title("Model Prediction - No detection", fontsize=14)
+    axes[1].axis('off')
+    
+    plt.suptitle(f"Example with 2 Bounding Boxes - Dataset Index #{example_idx}", 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+# %%
+# Visualize examples with 3 bounding boxes
+print("\n" + "=" * 60)
+print("VISUALIZING EXAMPLES WITH 3 BOUNDING BOXES")
+print("=" * 60)
+
+for i, example_idx in enumerate(examples_with_3_bboxes):
+    print(f"\n--- Example {i+1}: Dataset index #{example_idx} ---")
+    example = train_dataset[example_idx]
+    image = example['image']
+    bboxes = example['objects']['bbox']
+    categories = example['objects']['category_name']
+    
+    print(f"Image size: {image.size}")
+    print(f"Number of bboxes: {len(bboxes)}")
+    print(f"Categories: {categories}")
+    
+    # Run inference
+    print("\nRunning inference...")
+    model_response = run_qwen2vl_inference(
+        image,
+        "Detect the bounding box of the nutrition table."
+    )
+    print(f"Model response: {model_response}")
+    
+    # Parse the output
+    parsed_bboxes = parse_qwen_bbox_output(model_response)
+    print(f"Parsed bboxes: {parsed_bboxes}")
+    
+    # Create visualization
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Left: Ground truth (all bboxes)
+    axes[0].imshow(image)
+    axes[0].set_title(f"Ground Truth - {len(bboxes)} boxes (Green)", fontsize=14)
+    axes[0].axis('off')
+    
+    # Draw all ground truth bboxes
+    pil_width, pil_height = image.size
+    for bbox_idx, (bbox, category) in enumerate(zip(bboxes, categories)):
+        # OpenFoodFacts format: [y_min, x_min, y_max, x_max]
+        y_min, x_min, y_max, x_max = bbox
+        gt_x1 = int(x_min * pil_width)
+        gt_y1 = int(y_min * pil_height)
+        gt_x2 = int(x_max * pil_width)
+        gt_y2 = int(y_max * pil_height)
+        
+        rect = Rectangle((gt_x1, gt_y1), gt_x2-gt_x1, gt_y2-gt_y1,
+                        linewidth=3, edgecolor='green', facecolor='none')
+        axes[0].add_patch(rect)
+        # Add label
+        axes[0].text(gt_x1, gt_y1-5, f"Box {bbox_idx+1}: {category}", 
+                    color='green', fontsize=10, weight='bold')
+    
+    # Right: Model prediction
+    if parsed_bboxes:
+        img_with_pred = visualize_bbox_on_image(image, parsed_bboxes, normalize_coords=True)
+        axes[1].imshow(img_with_pred)
+        num_pred = len(parsed_bboxes) if isinstance(parsed_bboxes, list) else 1
+        axes[1].set_title(f"Model Prediction - {num_pred} box(es) (Red)", fontsize=14)
+    else:
+        axes[1].imshow(image)
+        axes[1].set_title("Model Prediction - No detection", fontsize=14)
+    axes[1].axis('off')
+    
+    plt.suptitle(f"Example with 3 Bounding Boxes - Dataset Index #{example_idx}", 
+                 fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown] id="vw_RG5kw7JGj"
 # # Data preprocessing
