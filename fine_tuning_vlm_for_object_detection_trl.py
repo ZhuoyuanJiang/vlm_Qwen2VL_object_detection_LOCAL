@@ -2177,8 +2177,56 @@ print(f"Model memory footprint: {model.get_memory_footprint() / 1024**3:.2f} GB"
 # IMPORTANT: For TRL version 0.12.0, we need to manually prepare the model before LoRA
 # Newer versions (0.21+) do this automatically, but 0.12.0 does not
 from peft import prepare_model_for_kbit_training
+
+# TODO: (JIANG)restructure/format the code to be consistent with the rest of the code (make the variable name more meaningful)
+
+# Trainables snapshot BEFORE k-bit preparation
+print("=== Before prepare_model_for_kbit_training ===")
+try:
+    _summarize_trainables(model)
+except NameError:
+    # Fallback: define a minimal summarizer here if not yet defined
+    def _summarize_trainables(m):
+        try:
+            total, trainable = 0, 0
+            examples = []
+            for n, p in m.named_parameters():
+                num = p.numel()
+                total += num
+                if p.requires_grad:
+                    trainable += num
+                    if len(examples) < 8:
+                        dev = str(p.device)
+                        examples.append(f"- {n} | shape={tuple(p.shape)} | device={dev}")
+            pct = 100.0 * trainable / max(total, 1)
+            print("\nTrainable parameter summary:")
+            print(f"  Total params: {total:,}")
+            print(f"  Trainable params: {trainable:,} ({pct:.2f}%)")
+            if hasattr(m, 'hf_device_map'):
+                print("  Device map snapshot (first 10):")
+                i = 0
+                for k, v in m.hf_device_map.items():
+                    print(f"    {k} -> {v}")
+                    i += 1
+                    if i >= 10:
+                        break
+            if examples:
+                print("  Sample trainable tensors:")
+                for e in examples:
+                    print("    ", e)
+        except Exception as _e:
+            print(f"[warn] could not summarize trainables: {_e}")
+    _summarize_trainables(model)
+
 model = prepare_model_for_kbit_training(model)
 print("✅ Model prepared for k-bit training")
+
+# Trainables snapshot AFTER k-bit preparation
+print("=== After prepare_model_for_kbit_training ===")
+try:
+    _summarize_trainables(model)
+except NameError:
+    _summarize_trainables(model)
 
 # %% [markdown] id="65wfO29isQlX"
 # ## Set Up QLoRA and SFTConfig 🚀
@@ -2233,6 +2281,48 @@ print(f"  Target modules: {lora_config.target_modules}")
 model = get_peft_model(model, lora_config)
 print("\n✅ LoRA adapters attached to model")
 model.print_trainable_parameters()
+
+# TODO: (JIANG)restructure/format the code to be consistent with the rest of the code (make the variable name more meaningful)
+
+print("=== After get_peft_model (LoRA attached) ===")
+try:
+    _summarize_trainables(model)
+except NameError:
+    _summarize_trainables(model)
+
+# --- Trainable parameter and device summary (sanity check for QLoRA + LoRA) ---
+def _summarize_trainables(m):
+    try:
+        total, trainable = 0, 0
+        examples = []
+        for n, p in m.named_parameters():
+            num = p.numel()
+            total += num
+            if p.requires_grad:
+                trainable += num
+                if len(examples) < 8:
+                    dev = str(p.device)
+                    examples.append(f"- {n} | shape={tuple(p.shape)} | device={dev}")
+        pct = 100.0 * trainable / max(total, 1)
+        print("\nTrainable parameter summary:")
+        print(f"  Total params: {total:,}")
+        print(f"  Trainable params: {trainable:,} ({pct:.2f}%)")
+        if hasattr(m, 'hf_device_map'):
+            print("  Device map snapshot (first 10):")
+            i = 0
+            for k, v in m.hf_device_map.items():
+                print(f"    {k} -> {v}")
+                i += 1
+                if i >= 10:
+                    break
+        if examples:
+            print("  Sample trainable tensors:")
+            for e in examples:
+                print("    ", e)
+    except Exception as _e:
+        print(f"[warn] could not summarize trainables: {_e}")
+
+_summarize_trainables(model)
 
 # %% [markdown] id="A1t7Hk_f7JGn"
 # Next, you need to create an SFT config for model finetuning. This step is critical for model convergence.
@@ -2917,6 +3007,8 @@ def analyze_token_distribution(collate_fn, dataset, num_samples=3):
 # Run token analysis
 print("\n📊 Running token distribution analysis...")
 analyze_token_distribution(collate_fn, train_dataset_formatted, num_samples=3)
+print("\n📊 Running token distribution analysis on validation split...")
+analyze_token_distribution(collate_fn, eval_dataset_formatted, num_samples=3)
 
 # Test collator with a small batch
 test_dataset = train_dataset_formatted.select(range(2))
@@ -2967,6 +3059,133 @@ else:
 
 print("="*60 + "\n")
 
+# TODO: (JIANG)restructure/format the following classes to be consistent with the rest of the code (make the variable name more meaningful)
+# --- Callbacks for training diagnostics ---
+from transformers import TrainerCallback
+
+class GradNormCallback(TrainerCallback):
+    """Logs gradient L2 norm over trainable parameters periodically."""
+    def __init__(self, log_every_steps=0):
+        self.trainer = None
+        self.log_every_steps = log_every_steps  # 0 -> use args.logging_steps
+
+    def on_init_end(self, args, state, control, **kwargs):
+        self.trainer = kwargs.get("trainer", None)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.trainer is None:
+            return control
+        freq = self.log_every_steps or getattr(args, "logging_steps", 10)
+        if state.global_step % max(freq, 1) != 0 or state.global_step == 0:
+            return control
+        total_sq, count, nonzero = 0.0, 0, 0
+        for n, p in self.trainer.model.named_parameters():
+            if p.requires_grad and p.grad is not None:
+                g = p.grad.detach()
+                val = g.float().norm(2).item()
+                total_sq += val * val
+                count += 1
+                if val > 0:
+                    nonzero += 1
+        total_norm = (total_sq ** 0.5) if count > 0 else 0.0
+        logs = {
+            "grad_lora_norm": total_norm,
+            "grads_nonzero": nonzero,
+            "grads_total": count,
+        }
+        # Use trainer.log so it reaches report_to backends
+        try:
+            self.trainer.log(logs)
+        except Exception:
+            pass
+        return control
+
+class IoUEvalCallback(TrainerCallback):
+    """Runs quick IoU evaluation at each evaluate event and logs results."""
+    def __init__(self, processor, eval_dataset, num_samples=24, prefix="eval"):
+        self.trainer = None
+        self.processor = processor
+        self.eval_dataset = eval_dataset
+        self.num_samples = num_samples
+        self.prefix = prefix
+
+    def on_init_end(self, args, state, control, **kwargs):
+        self.trainer = kwargs.get("trainer", None)
+
+    def on_evaluate(self, args, state, control, model=None, **kwargs):
+        if self.trainer is None or model is None:
+            return control
+        try:
+            # Lightweight internal IoU eval to avoid dependency ordering issues
+            import numpy as _np
+            from torchvision import ops as _ops
+            samples = min(self.num_samples, len(self.eval_dataset))
+            ious = []
+            succ = 0
+            for i in range(samples):
+                ex = self.eval_dataset[i]
+                img = ex['image']
+                gt = ex['objects']['bbox'][0]
+                # Build messages
+                msgs = [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text", "text": "Detect the bounding box of the nutrition table."},
+                    ],
+                }]
+                txt = self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+                img_inp, vid_inp = process_vision_info(msgs)
+                inputs = self.processor(text=[txt], images=img_inp, videos=vid_inp, padding=True, return_tensors="pt").to(model.device)
+                with torch.no_grad():
+                    gen = model.generate(**inputs, max_new_tokens=64, do_sample=False)
+                trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, gen)]
+                out_text = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+                parsed = parse_qwen_bbox_output(out_text)
+                if parsed:
+                    succ += 1
+                    bb = parsed[0]['bbox'] if isinstance(parsed, list) else parsed['bbox']
+                    pred = torch.tensor([[bb[0]/1000.0, bb[1]/1000.0, bb[2]/1000.0, bb[3]/1000.0]], dtype=torch.float32)
+                    y_min, x_min, y_max, x_max = gt
+                    gtt = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32)
+                    iou = _ops.box_iou(pred, gtt).item()
+                    ious.append(iou)
+                else:
+                    ious.append(0.0)
+            mean_iou = float(_np.mean(ious)) if ious else 0.0
+            median_iou = float(_np.median(ious)) if ious else 0.0
+            logs = {
+                f"{self.prefix}_iou_mean": mean_iou,
+                f"{self.prefix}_iou_median": median_iou,
+                f"{self.prefix}_iou_0.5": sum(1 for v in ious if v > 0.5) / max(samples,1),
+                f"{self.prefix}_iou_0.7": sum(1 for v in ious if v > 0.7) / max(samples,1),
+                f"{self.prefix}_det_rate": succ / max(samples,1),
+            }
+            self.trainer.log(logs)
+        except Exception as e:
+            print(f"[IoUEvalCallback] eval failed: {e}")
+        return control
+
+# Optional: print selected metrics to console so readers see them in notebook output
+class ConsoleLogCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return control
+        keys = [
+            "eval_iou_mean", "eval_iou_median", "eval_iou_0.5", "eval_iou_0.7", "eval_det_rate",
+            "grad_lora_norm", "grads_nonzero", "grads_total",
+        ]
+        present = {k: logs[k] for k in keys if k in logs}
+        if present:
+            try:
+                pretty = " ".join(
+                    [f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}" for k, v in present.items()]
+                )
+            except Exception:
+                pretty = str(present)
+            print(f"[metrics] {pretty}")
+        return control
+
 # %%
 from trl import SFTTrainer
 # TASK: Create the SFT trainer and launch training
@@ -2995,6 +3214,11 @@ print("SFTTrainer created successfully")
 print(f"Total training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
+
+# Attach diagnostics: IoU evaluation + gradient norm monitor
+trainer.add_callback(IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval"))  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
+trainer.add_callback(GradNormCallback())  # logs gradient norms for trainable (LoRA) params
+trainer.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
 
 
 # %% [markdown] id="skbpTuJlV8qN"
@@ -4239,8 +4463,9 @@ training_args_v3 = SFTConfig(
     remove_unused_columns=False,
     label_names=["labels"],
     
-    # Debugging
-    report_to="tensorboard",  # Using tensorboard instead of wandb
+    # Debugging / reporting
+    report_to="wandb",  # Use W&B for consistency with first trainer
+    run_name="qwen2vl-7b-assistant-only",  # Distinct run name for clear separation on W&B
     
     # TRL specific
     dataset_text_field=None,  # We handle formatting in collate_fn
@@ -4249,6 +4474,18 @@ training_args_v3 = SFTConfig(
 
 print("✅ Created new SFTConfig for assistant-only training")
 print(f"   Output directory: {training_args_v3.output_dir}")
+
+# Create a separate W&B run for assistant-only stage
+try:
+    import wandb as _wandb
+    _wandb.finish()
+    _wandb.init(
+        project="qwen2vl-nutrition-detection",
+        name="qwen2vl-7b-assistant-only",
+        tags=["stage:assistant-only", "collator:v3", "qlora", "lora"],
+    )
+except Exception as _e:
+    print(f"[warn] W&B re-init failed: {_e}")
 
 # %%
 # Initialize collate_fn_fixed_3
@@ -4279,6 +4516,12 @@ print(f"   - Total tokens in batch: {total}")
 print(f"   - Tokens being trained on: {non_masked} ({100*non_masked/total:.1f}%)")
 print(f"   - Tokens masked (ignored): {total - non_masked} ({100*(total-non_masked)/total:.1f}%)")
 
+# Additional token distribution audits for assistant-only collator
+print("\n📊 Token distribution (assistant-only) on train split...")
+analyze_token_distribution(collate_fn_v3, train_dataset_formatted, num_samples=3)
+print("\n📊 Token distribution (assistant-only) on validation split...")
+analyze_token_distribution(collate_fn_v3, eval_dataset_formatted, num_samples=3)
+
 # %%
 # Create the second SFTTrainer
 from trl import SFTTrainer
@@ -4304,6 +4547,11 @@ steps_per_epoch = len(train_dataset_formatted) // (training_args_v3.per_device_t
 total_steps = steps_per_epoch * training_args_v3.num_train_epochs
 print(f"   Steps per epoch: {steps_per_epoch}")
 print(f"   Total training steps: {total_steps}")
+
+# Attach the same diagnostics callbacks
+trainer_v3.add_callback(IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval"))  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
+trainer_v3.add_callback(GradNormCallback())  # logs gradient norms for trainable (LoRA) params
+trainer_v3.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
 
 # %%
 # Launch the second training
@@ -4331,4 +4579,3 @@ print("\nYou now have two trained models:")
 print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
 print(f"2. Assistant-only: {training_args_v3.output_dir}")
 print("\nCompare their performance to see which approach works better!")
-
