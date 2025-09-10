@@ -2178,55 +2178,48 @@ print(f"Model memory footprint: {model.get_memory_footprint() / 1024**3:.2f} GB"
 # Newer versions (0.21+) do this automatically, but 0.12.0 does not
 from peft import prepare_model_for_kbit_training
 
-# TODO: (JIANG)restructure/format the code to be consistent with the rest of the code (make the variable name more meaningful)
+# Define the trainable parameter summarizer function first (before using it)
+def _summarize_trainables(model_to_summarize):
+    try:
+        total_params, trainable_params = 0, 0
+        trainable_examples = []
+        for param_name, param_tensor in model_to_summarize.named_parameters():
+            param_count = param_tensor.numel()
+            total_params += param_count
+            if param_tensor.requires_grad:
+                trainable_params += param_count
+                if len(trainable_examples) < 8:
+                    device_str = str(param_tensor.device)
+                    trainable_examples.append(f"- {param_name} | shape={tuple(param_tensor.shape)} | device={device_str}")
+        trainable_percentage = 100.0 * trainable_params / max(total_params, 1)
+        print("\nTrainable parameter summary:")
+        print(f"  Total params: {total_params:,}")
+        print(f"  Trainable params: {trainable_params:,} ({trainable_percentage:.2f}%)")
+        if hasattr(model_to_summarize, 'hf_device_map'):
+            print("  Device map snapshot (first 10):")
+            device_count = 0
+            for module_name, device_location in model_to_summarize.hf_device_map.items():
+                print(f"    {module_name} -> {device_location}")
+                device_count += 1
+                if device_count >= 10:
+                    break
+        if trainable_examples:
+            print("  Sample trainable tensors:")
+            for example in trainable_examples:
+                print("    ", example)
+    except Exception as error:
+        print(f"[warn] could not summarize trainables: {error}")
 
 # Trainables snapshot BEFORE k-bit preparation
 print("=== Before prepare_model_for_kbit_training ===")
-try:
-    _summarize_trainables(model)
-except NameError:
-    # Fallback: define a minimal summarizer here if not yet defined
-    def _summarize_trainables(m):
-        try:
-            total, trainable = 0, 0
-            examples = []
-            for n, p in m.named_parameters():
-                num = p.numel()
-                total += num
-                if p.requires_grad:
-                    trainable += num
-                    if len(examples) < 8:
-                        dev = str(p.device)
-                        examples.append(f"- {n} | shape={tuple(p.shape)} | device={dev}")
-            pct = 100.0 * trainable / max(total, 1)
-            print("\nTrainable parameter summary:")
-            print(f"  Total params: {total:,}")
-            print(f"  Trainable params: {trainable:,} ({pct:.2f}%)")
-            if hasattr(m, 'hf_device_map'):
-                print("  Device map snapshot (first 10):")
-                i = 0
-                for k, v in m.hf_device_map.items():
-                    print(f"    {k} -> {v}")
-                    i += 1
-                    if i >= 10:
-                        break
-            if examples:
-                print("  Sample trainable tensors:")
-                for e in examples:
-                    print("    ", e)
-        except Exception as _e:
-            print(f"[warn] could not summarize trainables: {_e}")
-    _summarize_trainables(model)
+_summarize_trainables(model)
 
 model = prepare_model_for_kbit_training(model)
-print("✅ Model prepared for k-bit training")
+print("\n✅ Model prepared for k-bit training")
 
 # Trainables snapshot AFTER k-bit preparation
-print("=== After prepare_model_for_kbit_training ===")
-try:
-    _summarize_trainables(model)
-except NameError:
-    _summarize_trainables(model)
+print("\n=== After prepare_model_for_kbit_training ===")
+_summarize_trainables(model)
 
 # %% [markdown] id="65wfO29isQlX"
 # ## Set Up QLoRA and SFTConfig 🚀
@@ -2280,48 +2273,13 @@ print(f"  Target modules: {lora_config.target_modules}")
 # For TRL 0.12.0, we need to manually apply get_peft_model
 model = get_peft_model(model, lora_config)
 print("\n✅ LoRA adapters attached to model")
+
+# Note: model.print_trainable_parameters() counts differently than our custom function
+# PEFT's method includes the full base model size in total, our function only counts accessible parameters
+print("\n=== PEFT's parameter count (includes full base model) ===")
 model.print_trainable_parameters()
 
-# TODO: (JIANG)restructure/format the code to be consistent with the rest of the code (make the variable name more meaningful)
-
-print("=== After get_peft_model (LoRA attached) ===")
-try:
-    _summarize_trainables(model)
-except NameError:
-    _summarize_trainables(model)
-
-# --- Trainable parameter and device summary (sanity check for QLoRA + LoRA) ---
-def _summarize_trainables(m):
-    try:
-        total, trainable = 0, 0
-        examples = []
-        for n, p in m.named_parameters():
-            num = p.numel()
-            total += num
-            if p.requires_grad:
-                trainable += num
-                if len(examples) < 8:
-                    dev = str(p.device)
-                    examples.append(f"- {n} | shape={tuple(p.shape)} | device={dev}")
-        pct = 100.0 * trainable / max(total, 1)
-        print("\nTrainable parameter summary:")
-        print(f"  Total params: {total:,}")
-        print(f"  Trainable params: {trainable:,} ({pct:.2f}%)")
-        if hasattr(m, 'hf_device_map'):
-            print("  Device map snapshot (first 10):")
-            i = 0
-            for k, v in m.hf_device_map.items():
-                print(f"    {k} -> {v}")
-                i += 1
-                if i >= 10:
-                    break
-        if examples:
-            print("  Sample trainable tensors:")
-            for e in examples:
-                print("    ", e)
-    except Exception as _e:
-        print(f"[warn] could not summarize trainables: {_e}")
-
+print("\n=== After get_peft_model (LoRA attached) - Custom count ===")
 _summarize_trainables(model)
 
 # %% [markdown] id="A1t7Hk_f7JGn"
@@ -2485,123 +2443,6 @@ print(f"View your run at: {wandb.run.get_url()}")
 #
 # The collator function is critical for properly batching text-image pairs during training.
 # It handles the conversion from our formatted dataset to the format expected by the model.
-
-# %%
-# # Fixed collate_fn with improved error handling and robust masking  
-# def collate_fn_fixed(batch):
-#     """
-#     FIXED VERSION: Robust collate function that prevents out-of-range label issues.
-    
-#     This collator:
-#     1. Restores IMAGE_PLACEHOLDER with actual PIL images
-#     2. Uses process_vision_info to properly extract and format images
-#     3. Applies chat template to get formatted text
-#     4. Tokenizes text and processes images together
-#     5. Creates labels with proper masking for loss computation
-    
-#     Key improvements:
-#     - Properly masks all vision/special tokens to prevent training on them
-#     - Validates that no out-of-vocabulary tokens exist in labels
-#     - Uses token-based span finding for robust assistant response extraction
-#     - Handles edge cases gracefully (samples without images, OOV tokens)
-    
-#     Args:
-#         batch: List of samples from the dataset, each containing 'messages' and 'image'
-        
-#     Returns:
-#         Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
-#     """
-#     # STEP 1: Format the dataset into desired format:
-#     # Restores IMAGE_PLACEHOLDER with actual PIL image
-#     # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
-
-    
-#     # Extract messages and images from each sample
-#     messages_list = [sample['messages'] for sample in batch]
-#     images_list = [sample.get('image', None) for sample in batch]
-
-#     # Filter out samples without images
-#     valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-#     if not valid_pairs:
-#         raise ValueError("Batch contains no valid images.")
-
-#     messages_list, images_list = zip(*valid_pairs)
-#     messages_list = list(messages_list)
-#     images_list = list(images_list)
-
-
-#     all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
-
-#     for messages, image in zip(messages_list, images_list):
-#         messages_with_image = []
-#         # Clean up messages: remove None values and restore images
-#         for msg in messages:
-#             msg_copy = {'role': msg['role'], 'content': []}
-            
-#             for content_item in msg['content']:
-#                 # Skip None entries entirely
-#                 if content_item is None:
-#                     continue
-                    
-#                 # Process text content - filter out None text values
-#                 if content_item.get('type') == 'text':
-#                     text_value = content_item.get('text')
-#                     if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
-#                         msg_copy['content'].append({
-#                             'type': 'text',
-#                             'text': text_value
-#                         })
-#                 # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
-#                 elif content_item.get('type') == 'image' and msg['role'] == 'user':
-#                     # Check if it's IMAGE_PLACEHOLDER and replace with actual image
-#                     image_value = content_item.get('image')
-#                     if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-#                         # Replace with the actual PIL image from top level
-#                         msg_copy['content'].append({
-#                             'type': 'image',
-#                             'image': image  # Use the actual PIL image
-#                         })
-#                     elif image_value and image_value != 'None':
-#                         # Use existing image if it's not placeholder
-#                         msg_copy['content'].append({
-#                             'type': 'image',
-#                             'image': image_value
-#                         })
-            
-#             if msg_copy['content']:
-#                 messages_with_image.append(msg_copy)
-
-#         # Add the complete conversation (3 messages) to collection
-#         all_conversations.append(messages_with_image)
-    
-#     # Apply chat template to get text
-#     text = processor.apply_chat_template(
-#         all_conversations,
-#         tokenize=False,
-#         add_generation_prompt=False
-#     )
-
-#     # process_vision_info to get image and video
-#     image, video = process_vision_info(all_conversations)
-
-#     # Process texts and images together
-#     batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
-#         text=text,
-#         images=image,
-#         # videos=video,
-#         padding=True,
-#         truncation=False,
-#         return_tensors="pt"
-#     )
-    
-#     # Create labels from input_ids
-#     labels = batch_inputs["input_ids"].clone()
-    
-    
-    
-#     return batch_inputs
-
-# print("✅ Fixed collate_fn created")
 
 # %%
 import torch 
@@ -2978,18 +2819,19 @@ def analyze_token_distribution(collate_fn, dataset, num_samples=3):
             trained_token_ids = input_ids[trained_indices]
             decoded = processor.tokenizer.decode(trained_token_ids, skip_special_tokens=False)
             
-            # Clean up for display
-            decoded_clean = decoded.replace('<|im_start|>', '[START]')
-            decoded_clean = decoded_clean.replace('<|im_end|>', '[END]')
-            decoded_clean = decoded_clean.replace('<|object_ref_start|>', '[OBJ]')
-            decoded_clean = decoded_clean.replace('<|object_ref_end|>', '[/OBJ]')
-            decoded_clean = decoded_clean.replace('<|box_start|>', '[BOX]')
-            decoded_clean = decoded_clean.replace('<|box_end|>', '[/BOX]')
+            # # Clean up for display
+            # decoded_clean = decoded.replace('<|im_start|>', '[START]')
+            # decoded_clean = decoded_clean.replace('<|im_end|>', '[END]')
+            # decoded_clean = decoded_clean.replace('<|object_ref_start|>', '[OBJ]')
+            # decoded_clean = decoded_clean.replace('<|object_ref_end|>', '[/OBJ]')
+            # decoded_clean = decoded_clean.replace('<|box_start|>', '[BOX]')
+            # decoded_clean = decoded_clean.replace('<|box_end|>', '[/BOX]')
             
-            if len(decoded_clean) > 150:
-                print(f"  Training content: '{decoded_clean[:75]}...{decoded_clean[-75:]}'")
-            else:
-                print(f"  Training content: '{decoded_clean}'")
+            # if len(decoded_clean) > 150:
+            #     print(f"  Training content: '{decoded_clean[:75]}...{decoded_clean[-75:]}'")
+            # else:
+            #     print(f"  Training content: '{decoded_clean}'")
+            print(decoded)
         
         print()
     
@@ -3059,7 +2901,6 @@ else:
 
 print("="*60 + "\n")
 
-# TODO: (JIANG)restructure/format the following classes to be consistent with the rest of the code (make the variable name more meaningful)
 # --- Callbacks for training diagnostics ---
 from transformers import TrainerCallback
 
@@ -3075,27 +2916,27 @@ class GradNormCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         if self.trainer is None:
             return control
-        freq = self.log_every_steps or getattr(args, "logging_steps", 10)
-        if state.global_step % max(freq, 1) != 0 or state.global_step == 0:
+        logging_frequency = self.log_every_steps or getattr(args, "logging_steps", 10)
+        if state.global_step % max(logging_frequency, 1) != 0 or state.global_step == 0:
             return control
-        total_sq, count, nonzero = 0.0, 0, 0
-        for n, p in self.trainer.model.named_parameters():
-            if p.requires_grad and p.grad is not None:
-                g = p.grad.detach()
-                val = g.float().norm(2).item()
-                total_sq += val * val
-                count += 1
-                if val > 0:
-                    nonzero += 1
-        total_norm = (total_sq ** 0.5) if count > 0 else 0.0
-        logs = {
-            "grad_lora_norm": total_norm,
-            "grads_nonzero": nonzero,
-            "grads_total": count,
+        total_squared_norm, param_count, nonzero_grad_count = 0.0, 0, 0
+        for param_name, param_tensor in self.trainer.model.named_parameters():
+            if param_tensor.requires_grad and param_tensor.grad is not None:
+                gradient = param_tensor.grad.detach()
+                gradient_norm = gradient.float().norm(2).item()
+                total_squared_norm += gradient_norm * gradient_norm
+                param_count += 1
+                if gradient_norm > 0:
+                    nonzero_grad_count += 1
+        total_gradient_norm = (total_squared_norm ** 0.5) if param_count > 0 else 0.0
+        gradient_logs = {
+            "grad_lora_norm": total_gradient_norm,
+            "grads_nonzero": nonzero_grad_count,
+            "grads_total": param_count,
         }
         # Use trainer.log so it reaches report_to backends
         try:
-            self.trainer.log(logs)
+            self.trainer.log(gradient_logs)
         except Exception:
             pass
         return control
@@ -3119,47 +2960,47 @@ class IoUEvalCallback(TrainerCallback):
             # Lightweight internal IoU eval to avoid dependency ordering issues
             import numpy as _np
             from torchvision import ops as _ops
-            samples = min(self.num_samples, len(self.eval_dataset))
-            ious = []
-            succ = 0
-            for i in range(samples):
-                ex = self.eval_dataset[i]
-                img = ex['image']
-                gt = ex['objects']['bbox'][0]
+            num_eval_samples = min(self.num_samples, len(self.eval_dataset))
+            iou_scores = []
+            successful_predictions = 0
+            for sample_idx in range(num_eval_samples):
+                dataset_example = self.eval_dataset[sample_idx]
+                input_image = dataset_example['image']
+                ground_truth_bbox = dataset_example['objects']['bbox'][0]
                 # Build messages
-                msgs = [{
+                chat_messages = [{
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": img},
+                        {"type": "image", "image": input_image},
                         {"type": "text", "text": "Detect the bounding box of the nutrition table."},
                     ],
                 }]
-                txt = self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-                img_inp, vid_inp = process_vision_info(msgs)
-                inputs = self.processor(text=[txt], images=img_inp, videos=vid_inp, padding=True, return_tensors="pt").to(model.device)
+                prompt_text = self.processor.apply_chat_template(chat_messages, tokenize=False, add_generation_prompt=True)
+                processed_images, processed_videos = process_vision_info(chat_messages)
+                model_inputs = self.processor(text=[prompt_text], images=processed_images, videos=processed_videos, padding=True, return_tensors="pt").to(model.device)
                 with torch.no_grad():
-                    gen = model.generate(**inputs, max_new_tokens=64, do_sample=False)
-                trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, gen)]
-                out_text = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-                parsed = parse_qwen_bbox_output(out_text)
-                if parsed:
-                    succ += 1
-                    bb = parsed[0]['bbox'] if isinstance(parsed, list) else parsed['bbox']
-                    pred = torch.tensor([[bb[0]/1000.0, bb[1]/1000.0, bb[2]/1000.0, bb[3]/1000.0]], dtype=torch.float32)
-                    y_min, x_min, y_max, x_max = gt
-                    gtt = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32)
-                    iou = _ops.box_iou(pred, gtt).item()
-                    ious.append(iou)
+                    generated_output = model.generate(**model_inputs, max_new_tokens=64, do_sample=False)
+                trimmed_outputs = [output[len(input_ids):] for input_ids, output in zip(model_inputs.input_ids, generated_output)]
+                decoded_text = self.processor.batch_decode(trimmed_outputs, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+                parsed_bbox = parse_qwen_bbox_output(decoded_text)
+                if parsed_bbox:
+                    successful_predictions += 1
+                    bbox_coords = parsed_bbox[0]['bbox'] if isinstance(parsed_bbox, list) else parsed_bbox['bbox']
+                    predicted_tensor = torch.tensor([[bbox_coords[0]/1000.0, bbox_coords[1]/1000.0, bbox_coords[2]/1000.0, bbox_coords[3]/1000.0]], dtype=torch.float32)
+                    y_min, x_min, y_max, x_max = ground_truth_bbox
+                    ground_truth_tensor = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32)
+                    iou_value = _ops.box_iou(predicted_tensor, ground_truth_tensor).item()
+                    iou_scores.append(iou_value)
                 else:
-                    ious.append(0.0)
-            mean_iou = float(_np.mean(ious)) if ious else 0.0
-            median_iou = float(_np.median(ious)) if ious else 0.0
+                    iou_scores.append(0.0)
+            mean_iou = float(_np.mean(iou_scores)) if iou_scores else 0.0
+            median_iou = float(_np.median(iou_scores)) if iou_scores else 0.0
             logs = {
                 f"{self.prefix}_iou_mean": mean_iou,
                 f"{self.prefix}_iou_median": median_iou,
-                f"{self.prefix}_iou_0.5": sum(1 for v in ious if v > 0.5) / max(samples,1),
-                f"{self.prefix}_iou_0.7": sum(1 for v in ious if v > 0.7) / max(samples,1),
-                f"{self.prefix}_det_rate": succ / max(samples,1),
+                f"{self.prefix}_iou_0.5": sum(1 for iou_val in iou_scores if iou_val > 0.5) / max(num_eval_samples,1),
+                f"{self.prefix}_iou_0.7": sum(1 for iou_val in iou_scores if iou_val > 0.7) / max(num_eval_samples,1),
+                f"{self.prefix}_det_rate": successful_predictions / max(num_eval_samples,1),
             }
             self.trainer.log(logs)
         except Exception as e:
