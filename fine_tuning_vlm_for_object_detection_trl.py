@@ -245,6 +245,17 @@ InteractiveShell.ast_node_interactivity = "all"
 #
 # In this section, you should load the [openfoodfacts/nutrition-table-detection](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection) dataset. This dataset contains product images, the extracted bar codes, and bounding boxes for the nutrition tables.
 
+# %% [markdown]
+# 📚 **Note**: For detailed dataset exploration and analysis, see [`notebooks/01_dataset_exploration.ipynb`](notebooks/01_dataset_exploration.ipynb).
+#
+# That notebook provides in-depth analysis including:
+# - Image size distributions and statistics
+# - Bounding box characteristics (aspect ratios, coverage, positions)
+# - Visualization of multiple examples
+# - Recommendations for anchor configuration
+#
+# Below shows a streamlined version sufficient for understanding the training pipeline.
+
 # %% id="HKIHSAHX7JGi"
 # TASK: load the dataset into training and evaluation sets
 from datasets import load_dataset
@@ -2905,7 +2916,7 @@ print("="*60 + "\n")
 from transformers import TrainerCallback
 
 class GradNormCallback(TrainerCallback):
-    """Logs gradient L2 norm over trainable parameters periodically."""
+    """Logs gradient L2 norm over trainable parameters before optimizer step."""
     def __init__(self, log_every_steps=0):
         self.trainer = None
         self.log_every_steps = log_every_steps  # 0 -> use args.logging_steps
@@ -2913,32 +2924,57 @@ class GradNormCallback(TrainerCallback):
     def on_init_end(self, args, state, control, **kwargs):
         self.trainer = kwargs.get("trainer", None)
 
-    def on_step_end(self, args, state, control, **kwargs):
+    def on_pre_optimizer_step(self, args, state, control, **kwargs):
+        """Compute gradient statistics BEFORE optimizer.step() and zero_grad()."""
         if self.trainer is None:
             return control
         logging_frequency = self.log_every_steps or getattr(args, "logging_steps", 10)
         if state.global_step % max(logging_frequency, 1) != 0 or state.global_step == 0:
             return control
-        total_squared_norm, param_count, nonzero_grad_count = 0.0, 0, 0
+
+        total_squared_norm = 0.0
+        param_count = 0
+        nonzero_grad_count = 0
+
+        # Accumulate L2 norm over all trainable parameters with existing gradients
         for param_name, param_tensor in self.trainer.model.named_parameters():
-            if param_tensor.requires_grad and param_tensor.grad is not None:
-                gradient = param_tensor.grad.detach()
-                gradient_norm = gradient.float().norm(2).item()
-                total_squared_norm += gradient_norm * gradient_norm
+            if param_tensor.requires_grad and (param_tensor.grad is not None):
+                grad = param_tensor.grad.detach()
+                gnorm = grad.float().norm(2).item()
+                total_squared_norm += gnorm * gnorm
                 param_count += 1
-                if gradient_norm > 0:
+                if gnorm > 0:
                     nonzero_grad_count += 1
-        total_gradient_norm = (total_squared_norm ** 0.5) if param_count > 0 else 0.0
+
+        pre_clip_norm = (total_squared_norm ** 0.5) if param_count > 0 else 0.0
+
+        max_grad_norm = float(getattr(args, "max_grad_norm", 1.0) or 0.0)
+        grad_clipped = int(pre_clip_norm > max_grad_norm) if max_grad_norm > 0 else 0
+        clip_ratio = float(min(1.0, max_grad_norm / (pre_clip_norm + 1e-6))) if pre_clip_norm > 0 and max_grad_norm > 0 else 1.0
+
         gradient_logs = {
-            "grad_lora_norm": total_gradient_norm,
-            "grads_nonzero": nonzero_grad_count,
-            "grads_total": param_count,
+            # Keep the original key for continuity in dashboards
+            "grad_lora_norm": float(pre_clip_norm),
+            # Additional diagnostics
+            "grad_norm_pre_clip": float(pre_clip_norm),
+            "grad_clipped": int(grad_clipped),
+            "grad_clip_ratio": float(clip_ratio),
+            "grads_nonzero": int(nonzero_grad_count),
+            "grads_total": int(param_count),
         }
-        # Use trainer.log so it reaches report_to backends
+
         try:
             self.trainer.log(gradient_logs)
-        except Exception:
-            pass
+        except Exception as _e:
+            # Best-effort fallback
+            try:
+                import wandb as _wandb
+                if getattr(_wandb, "run", None) is not None:
+                    _wandb.log(gradient_logs, step=int(state.global_step))
+                else:
+                    print(f"[GradNormCallback] {gradient_logs}")
+            except Exception as _e2:
+                print(f"[GradNormCallback] Logging failed: {_e}; Fallback failed: {_e2}")
         return control
 
 class IoUEvalCallback(TrainerCallback):
@@ -2953,9 +2989,12 @@ class IoUEvalCallback(TrainerCallback):
     def on_init_end(self, args, state, control, **kwargs):
         self.trainer = kwargs.get("trainer", None)
 
-    def on_evaluate(self, args, state, control, model=None, **kwargs):
-        if self.trainer is None or model is None:
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        # Use the model from the attached trainer; CallbackHandler does not pass model here
+        if self.trainer is None or getattr(self.trainer, "model", None) is None:
             return control
+        model = self.trainer.model
+        logs = None
         try:
             # Lightweight internal IoU eval to avoid dependency ordering issues
             import numpy as _np
@@ -2978,8 +3017,13 @@ class IoUEvalCallback(TrainerCallback):
                 prompt_text = self.processor.apply_chat_template(chat_messages, tokenize=False, add_generation_prompt=True)
                 processed_images, processed_videos = process_vision_info(chat_messages)
                 model_inputs = self.processor(text=[prompt_text], images=processed_images, videos=processed_videos, padding=True, return_tensors="pt").to(model.device)
+                # Ensure eval mode and no grad for generation
+                was_training = model.training
+                model.eval()
                 with torch.no_grad():
                     generated_output = model.generate(**model_inputs, max_new_tokens=64, do_sample=False)
+                if was_training:
+                    model.train()
                 trimmed_outputs = [output[len(input_ids):] for input_ids, output in zip(model_inputs.input_ids, generated_output)]
                 decoded_text = self.processor.batch_decode(trimmed_outputs, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
                 parsed_bbox = parse_qwen_bbox_output(decoded_text)
@@ -2996,14 +3040,27 @@ class IoUEvalCallback(TrainerCallback):
             mean_iou = float(_np.mean(iou_scores)) if iou_scores else 0.0
             median_iou = float(_np.median(iou_scores)) if iou_scores else 0.0
             logs = {
-                f"{self.prefix}_iou_mean": mean_iou,
-                f"{self.prefix}_iou_median": median_iou,
-                f"{self.prefix}_iou_0.5": sum(1 for iou_val in iou_scores if iou_val > 0.5) / max(num_eval_samples,1),
-                f"{self.prefix}_iou_0.7": sum(1 for iou_val in iou_scores if iou_val > 0.7) / max(num_eval_samples,1),
-                f"{self.prefix}_det_rate": successful_predictions / max(num_eval_samples,1),
+                f"{self.prefix}_iou_mean": float(mean_iou),
+                f"{self.prefix}_iou_median": float(median_iou),
+                f"{self.prefix}_iou_0.5": float(sum(1 for iou_val in iou_scores if iou_val > 0.5) / max(num_eval_samples, 1)),
+                f"{self.prefix}_iou_0.7": float(sum(1 for iou_val in iou_scores if iou_val > 0.7) / max(num_eval_samples, 1)),
+                f"{self.prefix}_det_rate": float(successful_predictions / max(num_eval_samples, 1)),
             }
-            self.trainer.log(logs)
+            try:
+                self.trainer.log(logs)
+            except Exception as _e:
+                # Fallback to direct W&B logging if available
+                try:
+                    import wandb as _wandb
+                    if getattr(_wandb, "run", None) is not None:
+                        _wandb.log(logs, step=int(state.global_step))
+                        print(f"[IoUEvalCallback] Logged to W&B directly: {logs}")
+                    else:
+                        print(f"[IoUEvalCallback] Metrics: {logs}")
+                except Exception as _e2:
+                    print(f"[IoUEvalCallback] trainer.log failed: {_e}; fallback failed: {_e2}; metrics: {logs}")
         except Exception as e:
+            # If evaluation itself fails, report and continue
             print(f"[IoUEvalCallback] eval failed: {e}")
         return control
 
@@ -3057,8 +3114,14 @@ print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
 
 # Attach diagnostics: IoU evaluation + gradient norm monitor
-trainer.add_callback(IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval"))  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
-trainer.add_callback(GradNormCallback())  # logs gradient norms for trainable (LoRA) params
+# Attach diagnostics with explicit trainer binding
+_iou_cb = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
+_iou_cb.trainer = trainer
+trainer.add_callback(_iou_cb)  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
+
+_grad_cb = GradNormCallback()
+_grad_cb.trainer = trainer
+trainer.add_callback(_grad_cb)  # logs gradient norms for trainable (LoRA) params
 trainer.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
 
 
@@ -4389,9 +4452,14 @@ total_steps = steps_per_epoch * training_args_v3.num_train_epochs
 print(f"   Steps per epoch: {steps_per_epoch}")
 print(f"   Total training steps: {total_steps}")
 
-# Attach the same diagnostics callbacks
-trainer_v3.add_callback(IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval"))  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
-trainer_v3.add_callback(GradNormCallback())  # logs gradient norms for trainable (LoRA) params
+# Attach the same diagnostics callbacks with explicit trainer binding
+_iou_cb_v3 = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
+_iou_cb_v3.trainer = trainer_v3
+trainer_v3.add_callback(_iou_cb_v3)
+
+_grad_cb_v3 = GradNormCallback()
+_grad_cb_v3.trainer = trainer_v3
+trainer_v3.add_callback(_grad_cb_v3)
 trainer_v3.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
 
 # %%
