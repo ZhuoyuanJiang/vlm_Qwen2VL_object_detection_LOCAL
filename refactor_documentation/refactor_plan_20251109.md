@@ -99,7 +99,8 @@ vlm_Qwen2VL_object_detection/
 │
 ├── notebooks/                                    # 📊 Educational & Exploratory
 │   ├── 01_dataset_exploration.ipynb            # ✅ COMPLETED - Dataset EDA
-│   ├── 02_model_understanding.ipynb            # FUTURE - Model testing & inference experiments
+│   ├── 02_model_understanding.ipynb            # ✅ COMPLETED - Model testing & inference experiments
+│   ├── 03_verify_refactored_modules.ipynb      # ✅ COMPLETED - Verify extracted modules (temporary)
 │   ├── 03_training_comparison.ipynb            # FUTURE - Compare different training approaches
 │   └── 04_evaluation_analysis.ipynb            # FUTURE - Post-training analysis
 │
@@ -200,13 +201,14 @@ Create `02_model_understanding.ipynb` with:
 - Inference examples
 - Output parsing experiments
 
-### Phase 3: Modularize Utilities
-Move reusable code to `vlm_modules/`:
-- `data_utils.py`: Preprocessing, collators (keep multiple versions for education)
-- `model_utils.py`: Inference, parsing, visualization helpers
-- `training_callbacks.py`: Custom callbacks
-- `evaluation.py`: Evaluation metrics
-- `gpu_utils.py`: GPU management
+### Phase 3: Modularize Utilities ✅ MOSTLY COMPLETED (Session 2)
+Extract reusable code to `src/`:
+- ✅ `src/utils/gpu.py`: GPU management
+- ✅ `src/models/inference.py`: Inference, parsing
+- ✅ `src/utils/visualization.py`: Bbox visualization
+- 🔄 `src/data/collators.py`: Collator classes (needs V1/V2/V3 extraction)
+- 📝 TODO: `src/training/callbacks.py`: Custom callbacks
+- 📝 TODO: `src/utils/metrics.py`: Evaluation metrics
 
 ### Phase 4: Extract Evaluation Analysis
 Create `03_evaluation_analysis.ipynb` with:

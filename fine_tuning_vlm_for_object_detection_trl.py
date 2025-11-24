@@ -796,6 +796,18 @@ print(f"  🎯 Objects cover {coverage_ratios.mean():.1%} of image on average - 
 # %% [markdown] id="5nFWDveC7JGi"
 # # Understand Model
 
+# %% [markdown]
+# 📓 **For detailed model exploration and testing, see:** [`notebooks/02_model_understanding.ipynb`](notebooks/02_model_understanding.ipynb)
+#
+# This notebook covers:
+# - Tokenizer analysis and special tokens
+# - Model loading and configuration verification
+# - Complete inference pipeline demonstration
+# - Output parsing and visualization functions
+# - Pre-trained model testing on nutrition tables (single and multiple bounding boxes)
+#
+# The sections below provide a streamlined version for the complete training pipeline.
+
 # %% [markdown] id="l1h_1QI37JGi"
 # You should read the Qwen2-VL paper to familiarize yourself with the following:
 #
@@ -1108,8 +1120,19 @@ print("Output now looks like expected output format(with skip_special_tokens=Tru
 # %% [markdown] id="oosQDLcQ7JGj"
 # # Try Qwen2VL without finetuning
 
+# %% [markdown]
+# 📓 **For comprehensive pre-trained model testing with visualizations, see:** [`notebooks/02_model_understanding.ipynb`](notebooks/02_model_understanding.ipynb)
+#
+# That notebook includes:
+# - Testing on single nutrition table examples
+# - Testing on examples with 2 bounding boxes
+# - Testing on examples with 3 bounding boxes
+# - Side-by-side comparisons of ground truth vs predictions
+#
+# The sections below demonstrate the core functionality for this pipeline.
+
 # %% [markdown] id="Sy2oO_XE7JGj"
-# It’s a good idea to first assess the model’s current capability in detecting the nutrition table without any fine-tuning. This allows for a clear comparison between the model’s performance before and after fine-tuning. To do this, you need to write a function that extracts the bounding box by parsing the model output and then visualize the bounding box on the input image.
+# It's a good idea to first assess the model's current capability in detecting the nutrition table without any fine-tuning. This allows for a clear comparison between the model’s performance before and after fine-tuning. To do this, you need to write a function that extracts the bounding box by parsing the model output and then visualize the bounding box on the input image.
 #
 # Notice that the model’s response will likely follow a different format than wat we saw above for the dog image. Why? One possible explanation is that the nutrition table does not belong to a previously object class seen during the model’s training phase. Additionally, the bounding box coordinates returned by the model are likely inaccurate. This should highlight the necessity of fine-tuning to improve the model’s performance.
 
