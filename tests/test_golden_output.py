@@ -27,114 +27,137 @@ from src.data.collators import restore_images_in_conversations
 
 def test_convert_to_conversation_format_golden_output():
     """
-    TODO: Fill in expected_format with actual output from train_dataset[0]
+    Test convert_to_conversation_format with golden output from train_dataset[0].
 
     This test directly compares result with expected format for ONE specific datapoint.
     Very simple and intuitive!
     """
     # Load one specific datapoint
-    ds = load_dataset("openfoodfacts/nutrition-table-detection", split="train", streaming=True)
-    sample = next(iter(ds))  # First sample
+    ds = load_dataset("openfoodfacts/nutrition-table-detection", split="train[:1]", streaming=False)
+    sample = ds[0]
 
-    # TODO: Run convert_to_conversation_format(sample) once,
-    #       copy the output here, then uncomment and run test
+    # Expected format from actual output
+    expected_messages = [
+        {'role': 'system',
+         'content': [{'type': 'text',
+           'text': 'You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary.'}]},
+        {'role': 'user',
+         'content': [{'type': 'image', 'image': 'IMAGE_PLACEHOLDER'},
+          {'type': 'text',
+           'text': 'Detect the bounding box of the nutrition table.'}]},
+        {'role': 'assistant',
+         'content': [{'type': 'text',
+           'text': '<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,57),(991,603)<|box_end|>'}]}
+    ]
 
-    expected_format = {
-        # TODO: Fill this with actual output
-        # Should look like:
-        # 'messages': [
-        #     {'role': 'system', 'content': [{'type': 'text', 'text': '...'}]},
-        #     {'role': 'user', 'content': [
-        #         {'type': 'image', 'image': 'IMAGE_PLACEHOLDER'},
-        #         {'type': 'text', 'text': 'Detect the bounding box...'}
-        #     ]},
-        #     {'role': 'assistant', 'content': [{'type': 'text', 'text': '<|object_ref_start|>...'}]}
-        # ],
-        # 'image': <PIL.Image object - you'll need to handle this separately>
-    }
+    expected_image_size = (2592, 1944)
 
     # Convert sample
     result = convert_to_conversation_format(sample)
 
-    # TODO: Once expected_format is filled, uncomment this:
-    # assert result['messages'] == expected_format['messages'], \
-    #     f"Messages don't match!\nExpected: {expected_format['messages']}\nGot: {result['messages']}"
+    # Test messages structure
+    assert result['messages'] == expected_messages, \
+        f"Messages don't match!\nExpected: {expected_messages}\nGot: {result['messages']}"
 
-    # Note: Can't directly compare PIL images with ==, so check separately:
-    # assert isinstance(result['image'], Image.Image)
-    # assert result['image'].size == expected_format['image'].size  # if you store size
+    # Test image (can't directly compare PIL images with ==)
+    assert isinstance(result['image'], Image.Image), "Image must be PIL.Image object"
+    assert result['image'].size == expected_image_size, \
+        f"Image size mismatch! Expected: {expected_image_size}, Got: {result['image'].size}"
 
-    print("TODO: Fill in expected_format and uncomment assertions")
+    print("✅ PASS: convert_to_conversation_format golden output matches!")
 
 
 def test_restore_images_golden_output():
     """
-    TODO: Fill in expected format for restore_images_in_conversations output
-
-    This tests the format AFTER restoring images (what goes into apply_chat_template)
+    Test restore_images_in_conversations output matches expected format exactly.
     """
-    # Load samples
-    ds = load_dataset("openfoodfacts/nutrition-table-detection", split="train", streaming=True)
-    samples = [next(iter(ds)) for _ in range(2)]  # Take 2 samples
-
-    # Convert to conversation format
-    formatted_samples = [convert_to_conversation_format(s) for s in samples]
+    # Load 2 samples
+    ds = load_dataset("openfoodfacts/nutrition-table-detection", split="train[:2]", streaming=False)
+    formatted_samples = [convert_to_conversation_format(ds[i]) for i in range(2)]
     messages_list = [s['messages'] for s in formatted_samples]
     images_list = [s['image'] for s in formatted_samples]
 
-    # TODO: Run restore_images_in_conversations once, copy output here
-    expected_format = [
-        # TODO: Fill with actual output
-        # Should be list of conversations with actual PIL images (not 'IMAGE_PLACEHOLDER')
-        # [
-        #     [  # Conversation 1
-        #         {'role': 'system', 'content': [...]},
-        #         {'role': 'user', 'content': [
-        #             {'type': 'image', 'image': <PIL.Image>},  # ← Actual PIL image!
-        #             {'type': 'text', 'text': '...'}
-        #         ]},
-        #         {'role': 'assistant', 'content': [...]}
-        #     ],
-        #     [  # Conversation 2
-        #         ...
-        #     ]
-        # ]
-    ]
-
-    # Restore images
+    # Run the function
     result = restore_images_in_conversations(messages_list, images_list)
 
-    # TODO: Once expected_format is filled, uncomment:
-    # Check structure matches
-    # assert len(result) == len(expected_format)
-    # for i, (actual_conv, expected_conv) in enumerate(zip(result, expected_format)):
-    #     assert len(actual_conv) == 3, f"Conversation {i} should have 3 messages"
-    #     # Compare roles
-    #     assert [msg['role'] for msg in actual_conv] == [msg['role'] for msg in expected_conv]
-    #     # Check images are PIL Images (can't directly compare)
-    #     for msg in actual_conv:
-    #         if msg['role'] == 'user':
-    #             image_item = [c for c in msg['content'] if c.get('type') == 'image'][0]
-    #             assert isinstance(image_item['image'], Image.Image), "Must be PIL Image!"
+    # ============================================================
+    # EXPECTED OUTPUT - This is EXACTLY what result should look like:
+    # ============================================================
+    #
+    # [[{'role': 'system',
+    #    'content': [{'type': 'text',
+    #      'text': 'You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary.'}]},
+    #   {'role': 'user',
+    #    'content': [{'type': 'image',
+    #      'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=2592x1944>},
+    #     {'type': 'text',
+    #      'text': 'Detect the bounding box of the nutrition table.'}]},
+    #   {'role': 'assistant',
+    #    'content': [{'type': 'text',
+    #      'text': '<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,57),(991,603)<|box_end|>'}]}],
+    #  [{'role': 'system',
+    #    'content': [{'type': 'text',
+    #      'text': 'You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary.'}]},
+    #   {'role': 'user',
+    #    'content': [{'type': 'image',
+    #      'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=306x408>},
+    #     {'type': 'text',
+    #      'text': 'Detect the bounding box of the nutrition table.'}]},
+    #   {'role': 'assistant',
+    #    'content': [{'type': 'text',
+    #      'text': '<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(147,151),(516,588)<|box_end|>'}]}]]
+    #
+    # NOTE: <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=2592x1944> is Python's
+    # display representation of a PIL Image object. You can't write it as code directly.
+    # So in expected below, we use images_list[0] which IS that PIL Image object.
+    # When you print images_list[0], it shows: <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=2592x1944>
 
-    print("TODO: Fill in expected_format and uncomment assertions")
+    expected = [
+        # Sample 0
+        [{'role': 'system',
+          'content': [{'type': 'text',
+            'text': 'You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary.'}]},
+         {'role': 'user',
+          'content': [{'type': 'image',
+            'image': images_list[0]},  # = <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=2592x1944>
+           {'type': 'text',
+            'text': 'Detect the bounding box of the nutrition table.'}]},
+         {'role': 'assistant',
+          'content': [{'type': 'text',
+            'text': '<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,57),(991,603)<|box_end|>'}]}],
+        # Sample 1
+        [{'role': 'system',
+          'content': [{'type': 'text',
+            'text': 'You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary.'}]},
+         {'role': 'user',
+          'content': [{'type': 'image',
+            'image': images_list[1]},  # = <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=306x408>
+           {'type': 'text',
+            'text': 'Detect the bounding box of the nutrition table.'}]},
+         {'role': 'assistant',
+          'content': [{'type': 'text',
+            'text': '<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(147,151),(516,588)<|box_end|>'}]}]
+    ]
+
+    # ============================================================
+    # VERIFY: result == expected
+    # ============================================================
+    # Direct comparison works for everything because we use the same PIL Image objects.
+    # If restore_images_in_conversations returns the correct images, they'll be identical.
+
+    assert result == expected, f"Output doesn't match expected!\n\nGot:\n{result}\n\nExpected:\n{expected}"
+
+    print("✅ PASS: restore_images_in_conversations output == expected")
 
 
 if __name__ == "__main__":
     print("="*70)
-    print("GOLDEN OUTPUT TESTS - TODO")
-    print("="*70)
-    print("\nTo complete these tests:")
-    print("1. Run the functions manually and print output")
-    print("2. Copy the output into expected_format")
-    print("3. Uncomment the assertions")
-    print("4. Run tests to verify format stays consistent")
-    print("\nExample to get output:")
-    print("  ds = load_dataset('openfoodfacts/nutrition-table-detection', split='train', streaming=True)")
-    print("  sample = next(iter(ds))")
-    print("  result = convert_to_conversation_format(sample)")
-    print("  print(result)")
+    print("GOLDEN OUTPUT TESTS")
     print("="*70)
 
     test_convert_to_conversation_format_golden_output()
     test_restore_images_golden_output()
+
+    print("="*70)
+    print("All golden output tests passed!")
+    print("="*70)
