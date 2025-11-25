@@ -1375,7 +1375,7 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
     quantization_config=bnb_config,
     device_map="balanced",  # Changed from "auto" to evenly distribute across GPUs
     torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",  # Use Flash Attention 2 for efficiency
+    attn_implementation="sdpa",  # Use Flash Attention 2 for efficiency
     trust_remote_code=True,
 )
 
@@ -1792,8 +1792,8 @@ class collate_fn_fixed_1:
  
 
 
-        if 'input_ids' in batch_inputs: # only this fixes torch_dtype=torch.int32 error
-            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
+        # if 'input_ids' in batch_inputs: # only this fixes torch_dtype=torch.int32 error
+        #     batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
         # if 'image_grid_thw' in batch_inputs:
         #     batch_inputs['image_grid_thw'] = batch_inputs['image_grid_thw'].to(torch.int32)
         # if 'pixel_values' in batch_inputs:
@@ -1983,25 +1983,8 @@ class collate_fn_fixed_fixed1:
 print("✅ Fixed collate_fn_fixed_fixed1 created with Flash Attention dtype patch")
 
 # %%
-# IMPORTANT: Commented out duplicate model loading to prevent OOM errors
-# The model and processor are already loaded above (lines 1928-1946) with 4-bit quantization
-# Loading the model again here would:
-# 1. Consume double the GPU memory (causing OOM errors)
-# 2. Load WITHOUT quantization (full bfloat16), using much more memory
-# 3. Override the already configured quantized model
-#
-# Original code (COMMENTED OUT - DO NOT UNCOMMENT):
-# model_id = "Qwen/Qwen2-VL-7B-Instruct"
-# model = Qwen2VLForConditionalGeneration.from_pretrained(
-#     model_id,
-#     torch_dtype=torch.bfloat16,
-#     attn_implementation="flash_attention_2",
-#     device_map='auto'
-# )
-# processor = Qwen2VLProcessor.from_pretrained(model_id)
-
 # Use the already loaded model and processor from above
-collate_fn = collate_fn_fixed_fixed1(processor, model)
+collate_fn = collate_fn_fixed_1(processor, model)
 
 # %%
 # Function to analyze token distribution
@@ -2120,6 +2103,16 @@ else:
     print("✅ Flash Attention version is compatible")
 
 print("="*60 + "\n")
+
+# =============================================================================
+# REFACTORED: The callbacks below (GradNormCallback, IoUEvalCallback, ConsoleLogCallback)
+# have been extracted to: src/training/callbacks.py
+#
+# Import with:
+#   from src.training.callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
+#
+# The code below is kept for reference only and can be deleted.
+# =============================================================================
 
 # --- Callbacks for training diagnostics ---
 from transformers import TrainerCallback
@@ -2322,6 +2315,8 @@ print(f"Total training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
 
+
+# %%
 # Attach diagnostics: IoU evaluation + gradient norm monitor
 # Attach diagnostics with explicit trainer binding
 _iou_cb = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
@@ -2787,87 +2782,24 @@ print("This model can now be loaded without PEFT and used for efficient inferenc
 #
 # For Qwen2-VL, implement a custom collate_fn that restricts loss computation to the answer portion only, explicitly excluding the system prompt and question from the loss.
 
-# %% id="JxFyhptrccdr"
-# Bonus: Custom collate function with loss only on answer portion
-def collate_fn_answer_only(batch):
-    """
-    Custom collate function that computes loss only on the assistant's answer,
-    excluding system prompt and user question from loss computation.
-    """
-    messages_list = [sample['messages'] for sample in batch]
-    
-    texts = []
-    images_list = []
-    
-    for messages in messages_list:
-        text = processor.apply_chat_template(
-            messages, 
-            tokenize=False, 
-            add_generation_prompt=False
-        )
-        texts.append(text)
-        
-        image_inputs, video_inputs = process_vision_info(messages)
-        images_list.append(image_inputs)
-    
-    batch_inputs = processor(
-        text=texts,
-        images=images_list,
-        padding=True,
-        truncation=True,
-        max_length=2048,
-        return_tensors="pt"
-    )
-    
-    labels = batch_inputs["input_ids"].clone()
-    
-    # Mask all tokens except assistant's response
-    for i, text in enumerate(texts):
-        # Find the assistant response boundaries
-        # Look for the pattern that indicates start of assistant's actual answer
-        assistant_token = "<|im_start|>assistant"
-        assistant_end_token = "<|im_end|>"
-        
-        # Tokenize the full text to get token positions
-        encoding = processor.tokenizer(
-            text,
-            add_special_tokens=False,
-            return_offsets_mapping=True
-        )
-        
-        # Find assistant response start and end positions
-        assistant_start_idx = text.find(assistant_token)
-        if assistant_start_idx != -1:
-            # Find the actual content start (after the assistant tag)
-            content_start = assistant_start_idx + len(assistant_token)
-            
-            # Find where assistant response ends
-            assistant_end_idx = text.find(assistant_end_token, content_start)
-            
-            # Convert character positions to token positions
-            offset_mapping = encoding['offset_mapping']
-            
-            # Mask everything before assistant's actual response
-            for j, (start, end) in enumerate(offset_mapping):
-                if start < content_start:
-                    labels[i, j] = -100
-                elif assistant_end_idx != -1 and start >= assistant_end_idx:
-                    labels[i, j] = -100
-    
-    # Also mask padding and special vision tokens
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-    
-    batch_inputs["labels"] = labels
-    return batch_inputs
-
-print("Custom collate function for answer-only loss computation created successfully")
-
-
 # %%
+# Bonus: Custom collate function with loss only on answer portion
 
 # %% [markdown]
-# ---- Draft 
+# ---- Draft
 #
+
+# =============================================================================
+# REFACTORED: The draft collators below have been backed up to:
+# src/data/collators.py (under the "BACKUP/DRAFT COLLATORS" section)
+#
+# Backed up functions:
+#   - collate_fn_fixed_2 (verbose debug collator)
+#   - debug_collate_fn (debug helper function)
+#   - test_collate_fn_fixed_3 (test function for coordinate scaling)
+#
+# The code below is kept for reference only and can be deleted.
+# =============================================================================
 
 # %%
 def collate_fn_fixed_2(batch):
