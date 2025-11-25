@@ -2105,186 +2105,17 @@ else:
 print("="*60 + "\n")
 
 # =============================================================================
-# REFACTORED: The callbacks below (GradNormCallback, IoUEvalCallback, ConsoleLogCallback)
-# have been extracted to: src/training/callbacks.py
+# DELETED FOR CLEANNESS: GradNormCallback, IoUEvalCallback, ConsoleLogCallback
 #
-# Import with:
-#   from src.training.callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
+# For reference:
+#   - Import: from src.training.callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
+#   - Or copy from: src/training/callbacks.py
 #
-# The code below is kept for reference only and can be deleted.
+# Original structure:
+#   class GradNormCallback(TrainerCallback):  # ~60 lines - logs gradient norms
+#   class IoUEvalCallback(TrainerCallback):   # ~85 lines - runs IoU evaluation
+#   class ConsoleLogCallback(TrainerCallback): # ~18 lines - prints metrics
 # =============================================================================
-
-# --- Callbacks for training diagnostics ---
-from transformers import TrainerCallback
-
-class GradNormCallback(TrainerCallback):
-    """Logs gradient L2 norm over trainable parameters before optimizer step."""
-    def __init__(self, log_every_steps=0):
-        self.trainer = None
-        self.log_every_steps = log_every_steps  # 0 -> use args.logging_steps
-
-    def on_init_end(self, args, state, control, **kwargs):
-        self.trainer = kwargs.get("trainer", None)
-
-    def on_pre_optimizer_step(self, args, state, control, **kwargs):
-        """Compute gradient statistics BEFORE optimizer.step() and zero_grad()."""
-        if self.trainer is None:
-            return control
-        logging_frequency = self.log_every_steps or getattr(args, "logging_steps", 10)
-        if state.global_step % max(logging_frequency, 1) != 0 or state.global_step == 0:
-            return control
-
-        total_squared_norm = 0.0
-        param_count = 0
-        nonzero_grad_count = 0
-
-        # Accumulate L2 norm over all trainable parameters with existing gradients
-        for param_name, param_tensor in self.trainer.model.named_parameters():
-            if param_tensor.requires_grad and (param_tensor.grad is not None):
-                grad = param_tensor.grad.detach()
-                gnorm = grad.float().norm(2).item()
-                total_squared_norm += gnorm * gnorm
-                param_count += 1
-                if gnorm > 0:
-                    nonzero_grad_count += 1
-
-        pre_clip_norm = (total_squared_norm ** 0.5) if param_count > 0 else 0.0
-
-        max_grad_norm = float(getattr(args, "max_grad_norm", 1.0) or 0.0)
-        grad_clipped = int(pre_clip_norm > max_grad_norm) if max_grad_norm > 0 else 0
-        clip_ratio = float(min(1.0, max_grad_norm / (pre_clip_norm + 1e-6))) if pre_clip_norm > 0 and max_grad_norm > 0 else 1.0
-
-        gradient_logs = {
-            # Keep the original key for continuity in dashboards
-            "grad_lora_norm": float(pre_clip_norm),
-            # Additional diagnostics
-            "grad_norm_pre_clip": float(pre_clip_norm),
-            "grad_clipped": int(grad_clipped),
-            "grad_clip_ratio": float(clip_ratio),
-            "grads_nonzero": int(nonzero_grad_count),
-            "grads_total": int(param_count),
-        }
-
-        try:
-            self.trainer.log(gradient_logs)
-        except Exception as _e:
-            # Best-effort fallback
-            try:
-                import wandb as _wandb
-                if getattr(_wandb, "run", None) is not None:
-                    _wandb.log(gradient_logs, step=int(state.global_step))
-                else:
-                    print(f"[GradNormCallback] {gradient_logs}")
-            except Exception as _e2:
-                print(f"[GradNormCallback] Logging failed: {_e}; Fallback failed: {_e2}")
-        return control
-
-class IoUEvalCallback(TrainerCallback):
-    """Runs quick IoU evaluation at each evaluate event and logs results."""
-    def __init__(self, processor, eval_dataset, num_samples=24, prefix="eval"):
-        self.trainer = None
-        self.processor = processor
-        self.eval_dataset = eval_dataset
-        self.num_samples = num_samples
-        self.prefix = prefix
-
-    def on_init_end(self, args, state, control, **kwargs):
-        self.trainer = kwargs.get("trainer", None)
-
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        # Use the model from the attached trainer; CallbackHandler does not pass model here
-        if self.trainer is None or getattr(self.trainer, "model", None) is None:
-            return control
-        model = self.trainer.model
-        logs = None
-        try:
-            # Lightweight internal IoU eval to avoid dependency ordering issues
-            import numpy as _np
-            from torchvision import ops as _ops
-            num_eval_samples = min(self.num_samples, len(self.eval_dataset))
-            iou_scores = []
-            successful_predictions = 0
-            for sample_idx in range(num_eval_samples):
-                dataset_example = self.eval_dataset[sample_idx]
-                input_image = dataset_example['image']
-                ground_truth_bbox = dataset_example['objects']['bbox'][0]
-                # Build messages
-                chat_messages = [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": input_image},
-                        {"type": "text", "text": "Detect the bounding box of the nutrition table."},
-                    ],
-                }]
-                prompt_text = self.processor.apply_chat_template(chat_messages, tokenize=False, add_generation_prompt=True)
-                processed_images, processed_videos = process_vision_info(chat_messages)
-                model_inputs = self.processor(text=[prompt_text], images=processed_images, videos=processed_videos, padding=True, return_tensors="pt").to(model.device)
-                # Ensure eval mode and no grad for generation
-                was_training = model.training
-                model.eval()
-                with torch.no_grad():
-                    generated_output = model.generate(**model_inputs, max_new_tokens=64, do_sample=False)
-                if was_training:
-                    model.train()
-                trimmed_outputs = [output[len(input_ids):] for input_ids, output in zip(model_inputs.input_ids, generated_output)]
-                decoded_text = self.processor.batch_decode(trimmed_outputs, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-                parsed_bbox = parse_qwen_bbox_output(decoded_text)
-                if parsed_bbox:
-                    successful_predictions += 1
-                    bbox_coords = parsed_bbox[0]['bbox'] if isinstance(parsed_bbox, list) else parsed_bbox['bbox']
-                    predicted_tensor = torch.tensor([[bbox_coords[0]/1000.0, bbox_coords[1]/1000.0, bbox_coords[2]/1000.0, bbox_coords[3]/1000.0]], dtype=torch.float32)
-                    y_min, x_min, y_max, x_max = ground_truth_bbox
-                    ground_truth_tensor = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32)
-                    iou_value = _ops.box_iou(predicted_tensor, ground_truth_tensor).item()
-                    iou_scores.append(iou_value)
-                else:
-                    iou_scores.append(0.0)
-            mean_iou = float(_np.mean(iou_scores)) if iou_scores else 0.0
-            median_iou = float(_np.median(iou_scores)) if iou_scores else 0.0
-            logs = {
-                f"{self.prefix}_iou_mean": float(mean_iou),
-                f"{self.prefix}_iou_median": float(median_iou),
-                f"{self.prefix}_iou_0.5": float(sum(1 for iou_val in iou_scores if iou_val > 0.5) / max(num_eval_samples, 1)),
-                f"{self.prefix}_iou_0.7": float(sum(1 for iou_val in iou_scores if iou_val > 0.7) / max(num_eval_samples, 1)),
-                f"{self.prefix}_det_rate": float(successful_predictions / max(num_eval_samples, 1)),
-            }
-            try:
-                self.trainer.log(logs)
-            except Exception as _e:
-                # Fallback to direct W&B logging if available
-                try:
-                    import wandb as _wandb
-                    if getattr(_wandb, "run", None) is not None:
-                        _wandb.log(logs, step=int(state.global_step))
-                        print(f"[IoUEvalCallback] Logged to W&B directly: {logs}")
-                    else:
-                        print(f"[IoUEvalCallback] Metrics: {logs}")
-                except Exception as _e2:
-                    print(f"[IoUEvalCallback] trainer.log failed: {_e}; fallback failed: {_e2}; metrics: {logs}")
-        except Exception as e:
-            # If evaluation itself fails, report and continue
-            print(f"[IoUEvalCallback] eval failed: {e}")
-        return control
-
-# Optional: print selected metrics to console so readers see them in notebook output
-class ConsoleLogCallback(TrainerCallback):
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if not logs:
-            return control
-        keys = [
-            "eval_iou_mean", "eval_iou_median", "eval_iou_0.5", "eval_iou_0.7", "eval_det_rate",
-            "grad_lora_norm", "grads_nonzero", "grads_total",
-        ]
-        present = {k: logs[k] for k in keys if k in logs}
-        if present:
-            try:
-                pretty = " ".join(
-                    [f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}" for k, v in present.items()]
-                )
-            except Exception:
-                pretty = str(present)
-            print(f"[metrics] {pretty}")
-        return control
 
 # %%
 from trl import SFTTrainer
@@ -2317,16 +2148,16 @@ print(f"Number of training steps: {len(train_dataset_formatted) // (training_arg
 
 
 # %%
-# Attach diagnostics: IoU evaluation + gradient norm monitor
-# Attach diagnostics with explicit trainer binding
-_iou_cb = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
-_iou_cb.trainer = trainer
-trainer.add_callback(_iou_cb)  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
+# # Attach diagnostics: IoU evaluation + gradient norm monitor
+# # Attach diagnostics with explicit trainer binding
+# _iou_cb = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
+# _iou_cb.trainer = trainer
+# trainer.add_callback(_iou_cb)  # logs task metrics (eval_iou_mean/median/thresholds/det_rate)
 
-_grad_cb = GradNormCallback()
-_grad_cb.trainer = trainer
-trainer.add_callback(_grad_cb)  # logs gradient norms for trainable (LoRA) params
-trainer.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
+# _grad_cb = GradNormCallback()
+# _grad_cb.trainer = trainer
+# trainer.add_callback(_grad_cb)  # logs gradient norms for trainable (LoRA) params
+# trainer.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
 
 
 # %% [markdown] id="skbpTuJlV8qN"
@@ -2785,417 +2616,21 @@ print("This model can now be loaded without PEFT and used for efficient inferenc
 # %%
 # Bonus: Custom collate function with loss only on answer portion
 
-# %% [markdown]
-# ---- Draft
-#
-
 # =============================================================================
-# REFACTORED: The draft collators below have been backed up to:
-# src/data/collators.py (under the "BACKUP/DRAFT COLLATORS" section)
+# DELETED FOR CLEANNESS: collate_fn_fixed_2, debug_collate_fn
 #
-# Backed up functions:
-#   - collate_fn_fixed_2 (verbose debug collator)
-#   - debug_collate_fn (debug helper function)
-#   - test_collate_fn_fixed_3 (test function for coordinate scaling)
+# For reference:
+#   - Import: from src.data.collators import collate_fn_fixed_2, debug_collate_fn
+#   - Or copy from: src/data/collators.py (under "BACKUP/DRAFT COLLATORS" section)
 #
-# The code below is kept for reference only and can be deleted.
+# Original structure:
+#   def collate_fn_fixed_2(batch):           # ~265 lines - verbose debug collator with improved label masking
+#   def debug_collate_fn(collate_fn, ...):   # ~106 lines - debug helper to test collators and verify training tokens
+#
+# Example usage (after importing):
+#   # from src.data.collators import collate_fn_fixed_2, debug_collate_fn
+#   # test_output = debug_collate_fn(collate_fn_fixed_2, train_dataset_formatted, num_samples=2)
 # =============================================================================
-
-# %%
-def collate_fn_fixed_2(batch):
-    """
-    FIXED VERSION: Robust collate function that prevents out-of-range label issues.
-    
-    This collator:
-    1. Restores IMAGE_PLACEHOLDER with actual PIL images
-    2. Uses process_vision_info to properly extract and format images
-    3. Applies chat template to get formatted text
-    4. Tokenizes text and processes images together
-    5. Creates labels with proper masking for loss computation
-    
-    Key improvements:
-    - Properly masks all vision/special tokens to prevent training on them
-    - Validates that no out-of-vocabulary tokens exist in labels
-    - Uses token-based span finding for robust assistant response extraction
-    - Handles edge cases gracefully (samples without images, OOV tokens)
-    - CRITICAL: Initially masks ALL tokens, then selectively unmasks only assistant responses
-    - Provides detailed debugging statistics about training token percentages
-    
-    Args:
-        batch: List of samples from the dataset, each containing 'messages' and 'image'
-        
-    Returns:
-        Dict with input_ids, attention_mask, pixel_values, image_grid_thw, and labels
-    """
-    # STEP 1: Format the dataset into desired format:
-    # Restores IMAGE_PLACEHOLDER with actual PIL image
-    # so each element in the batch looks like sample of convert_to_conversation_format(train_dataset[0])
-
-
-    # Extract messages and images from each sample
-    messages_list = [sample['messages'] for sample in batch]
-    images_list = [sample.get('image', None) for sample in batch]
-
-    # Filter out samples without images
-    valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-    if not valid_pairs:
-        raise ValueError("Batch contains no valid images.")
-
-    messages_list, images_list = zip(*valid_pairs)
-    messages_list = list(messages_list)
-    images_list = list(images_list)
-
-
-    all_conversations = []  # This will hold complete conversations, each conversation is a list of 3 messages (system, assistant, user)
-
-    for messages, image in zip(messages_list, images_list):
-        messages_with_image = []
-        # Clean up messages: remove None values and restore images
-        for msg in messages:
-            msg_copy = {'role': msg['role'], 'content': []}
-
-            for content_item in msg['content']:
-                # Skip None entries entirely
-                if content_item is None:
-                    continue
-
-                # Process text content - filter out None text values
-                if content_item.get('type') == 'text':
-                    text_value = content_item.get('text')
-                    if text_value is not None and text_value != 'None':  # Check for actual None and string 'None'
-                        msg_copy['content'].append({
-                            'type': 'text',
-                            'text': text_value
-                        })
-                # Process image content - replace IMAGE_PLACEHOLDER with actual PIL image
-                elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                    # Check if it's IMAGE_PLACEHOLDER and replace with actual image
-                    image_value = content_item.get('image')
-                    if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                        # Replace with the actual PIL image from top level
-                        msg_copy['content'].append({
-                            'type': 'image',
-                            'image': image  # Use the actual PIL image
-                        })
-                    elif image_value and image_value != 'None':
-                        # Use existing image if it's not placeholder
-                        msg_copy['content'].append({
-                            'type': 'image',
-                            'image': image_value
-                        })
-
-            if msg_copy['content']:
-                messages_with_image.append(msg_copy)
-
-        # Add the complete conversation (3 messages) to collection
-        all_conversations.append(messages_with_image)
-
-    # Apply chat template to get text
-    text = processor.apply_chat_template(
-        all_conversations,
-        tokenize=False,
-        add_generation_prompt=False
-    )
-
-    # process_vision_info to get image and video
-    image, video = process_vision_info(all_conversations)
-
-    # Process texts and images together
-    batch_inputs = processor( # batch_inputs is a dictionary containing input_ids, attention_mask, pixel_values, and image_grid_thw
-        text=text,
-        images=image,
-        # videos=video,
-        padding=True,
-        truncation=False,
-        return_tensors="pt"
-    )
-
-    # Create labels from input_ids
-    labels = batch_inputs["input_ids"].clone()
-
-    # Get vocabulary size for validation
-    vocab_size = processor.tokenizer.vocab_size
-
-    # Track OOV tokens (these are vision tokens with IDs >= vocab_size)
-    # IMPORTANT: We do NOT modify input_ids - vision tokens are valid for the model!
-    oov_mask = batch_inputs["input_ids"] >= vocab_size
-    if oov_mask.any():
-        num_oov = oov_mask.sum().item()
-        print(f"[collate_fn_fixed_2] INFO: Found {num_oov} vision tokens (IDs >= vocab_size)")
-        # These are expected vision tokens - we just mask them in labels
-        labels[oov_mask] = -100
-
-    # IMPORTANT: Start by masking EVERYTHING - this ensures we only train on what we explicitly unmask
-    labels[:, :] = -100
-
-    # Collect special token IDs for verification
-    special_token_ids = set()
-
-    # Add padding token
-    if processor.tokenizer.pad_token_id is not None:
-        special_token_ids.add(processor.tokenizer.pad_token_id)
-
-    # Add vision and chat special tokens
-    special_token_strings = [
-        "<|vision_start|>", "<|vision_end|>", "<|image_pad|>", "<|video_pad|>",
-        "<|im_start|>", "<|im_end|>",
-        "<|object_ref_start|>", "<|object_ref_end|>",
-        "<|box_start|>", "<|box_end|>"
-    ]
-
-    for token_str in special_token_strings:
-        if token_str in processor.tokenizer.get_vocab():
-            token_id = processor.tokenizer.convert_tokens_to_ids(token_str)
-            if token_id is not None:  # Don't check vocab_size - special tokens might be outside
-                special_token_ids.add(token_id)
-
-    # DEBUG: Let's understand the token structure
-    debug_mode = True  # Set to False in production
-    if debug_mode and labels.shape[0] > 0:
-        # Decode first 100 tokens to see structure
-        first_100 = batch_inputs["input_ids"][0][:100]
-        decoded = processor.tokenizer.decode(first_100, skip_special_tokens=False)
-        print(f"[DEBUG] First 100 tokens decoded: {decoded[:200]}...")
-
-    # Find and unmask ONLY assistant responses
-    # Try multiple formats for assistant markers
-    assistant_markers = [
-        ("<|im_start|>assistant\n", "<|im_end|>"),
-        ("<|im_start|>assistant", "<|im_end|>"),  # Without newline
-        ("assistant\n", "<|im_end|>"),  # Simpler pattern
-    ]
-
-    assistant_found = False
-    for start_text, end_text in assistant_markers:
-        if assistant_found:
-            break
-
-        try:
-            assistant_start_ids = processor.tokenizer.encode(start_text, add_special_tokens=False)
-            assistant_end_ids = processor.tokenizer.encode(end_text, add_special_tokens=False)
-
-            if debug_mode:
-                print(f"[DEBUG] Trying pattern: '{start_text}' -> {assistant_start_ids}")
-
-            if assistant_start_ids and assistant_end_ids:
-                # Helper function to find token sequence
-                def find_token_sequence(tokens, sequence, start_pos=0):
-                    seq_len = len(sequence)
-                    for i in range(start_pos, len(tokens) - seq_len + 1):
-                        if tokens[i:i + seq_len].tolist() == sequence:
-                            return i
-                    return -1
-
-                # Process each sequence in the batch
-                assistant_tokens_found = 0
-                for batch_idx in range(labels.shape[0]):
-                    input_ids_list = batch_inputs["input_ids"][batch_idx]
-
-                    # Find all assistant response spans
-                    pos = 0
-                    while pos < len(input_ids_list):
-                        # Find start of assistant response
-                        start_pos = find_token_sequence(input_ids_list, assistant_start_ids, pos)
-                        if start_pos == -1:
-                            break
-
-                        assistant_found = True
-
-                        # Find end of assistant response
-                        response_start = start_pos + len(assistant_start_ids)
-                        end_pos = find_token_sequence(input_ids_list, assistant_end_ids, response_start)
-
-                        if end_pos == -1:
-                            # No end marker found, unmask to the end
-                            end_pos = len(input_ids_list)
-
-                        if debug_mode and batch_idx == 0 and assistant_tokens_found == 0:
-                            # Debug: Show what we're unmasking
-                            response_tokens = input_ids_list[response_start:min(response_start+50, end_pos)]
-                            response_text = processor.tokenizer.decode(response_tokens, skip_special_tokens=False)
-                            print(f"[DEBUG] Found assistant response: '{response_text}'")
-
-                        # Unmask the assistant response (but not special tokens)
-                        for idx in range(response_start, end_pos):
-                            token_id = input_ids_list[idx].item()
-                            # Only unmask if it's not a special token and within vocab range
-                            if token_id not in special_token_ids and 0 <= token_id < vocab_size:
-                                labels[batch_idx, idx] = token_id
-                                assistant_tokens_found += 1
-
-                        # Move past this response
-                        pos = end_pos + len(assistant_end_ids) if end_pos < len(input_ids_list) else len(input_ids_list)
-
-                if assistant_tokens_found > 0:
-                    print(f"[collate_fn_fixed_2] Found {assistant_tokens_found} assistant tokens to train on")
-                    break  # Found with this pattern, don't try others
-
-        except Exception as e:
-            print(f"[collate_fn_fixed_2] Error trying pattern '{start_text}': {e}")
-
-    if not assistant_found:
-        print("[collate_fn_fixed_2] WARNING: No assistant responses found with any pattern!")
-        # DEBUG: Show the actual structure
-        if debug_mode and labels.shape[0] > 0:
-            # Find where assistant might be
-            full_text = processor.tokenizer.decode(batch_inputs["input_ids"][0], skip_special_tokens=False)
-            assistant_idx = full_text.find("assistant")
-            if assistant_idx >= 0:
-                print(f"[DEBUG] Found 'assistant' at position {assistant_idx}")
-                print(f"[DEBUG] Context: ...{full_text[max(0, assistant_idx-20):assistant_idx+100]}...")
-
-    # Final validation
-    valid_labels = labels[labels != -100]
-    if valid_labels.numel() == 0:
-        print("[collate_fn_fixed_2] WARNING: No tokens left for training after masking!")
-    else:
-        # Check all unmasked tokens are within vocabulary
-        max_label = valid_labels.max().item()
-        if max_label >= vocab_size:
-            print(f"[collate_fn_fixed_2] ERROR: Found label {max_label} >= vocab_size {vocab_size}")
-            labels[labels >= vocab_size] = -100
-
-        # Print statistics
-        unmasked_count = valid_labels.numel()
-        total_count = labels.numel()
-        print(f"[collate_fn_fixed_2] Unmasked {unmasked_count}/{total_count} tokens ({unmasked_count/total_count*100:.1f}%) for training")
-
-    # Add labels to batch
-    batch_inputs["labels"] = labels
-
-    return batch_inputs
-
-# %%
-print("✅ collate_fn_fixed_2 created with improved label masking")
-
-
-# %%
-# DEBUG: Test collate_fn_fixed_2 and verify training tokens
-def debug_collate_fn(collate_fn, dataset, num_samples=2):
-    """Debug helper to test collator and see what we're training on"""
-    print("="*60)
-    print("DEBUG: Testing collate_fn_fixed_2")
-    print("="*60)
-    
-    # Test with a small batch
-    test_batch = [dataset[i] for i in range(min(num_samples, len(dataset)))]
-    
-    print(f"\n📋 Testing with {len(test_batch)} samples...")
-    
-    # Run the collator
-    try:
-        batch_output = collate_fn(test_batch)
-        print("✅ Collator executed successfully")
-    except Exception as e:
-        print(f"❌ Collator failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-    
-    # Check sequence lengths
-    seq_lengths = (batch_output["attention_mask"] == 1).sum(dim=1)
-    print(f"\n📊 Sequence statistics:")
-    print(f"   Sequence lengths: {seq_lengths.tolist()}")
-    print(f"   Max sequence length: {seq_lengths.max().item()}")
-    print(f"   Min sequence length: {seq_lengths.min().item()}")
-    
-    # Check what tokens we're actually training on
-    labels = batch_output["labels"]
-    print(f"\n🎯 Training token analysis:")
-    
-    for batch_idx in range(labels.shape[0]):
-        unmasked_indices = (labels[batch_idx] != -100).nonzero(as_tuple=True)[0]
-        seq_len = seq_lengths[batch_idx].item()
-        
-        print(f"\n   Sample {batch_idx}:")
-        print(f"   - Total tokens: {seq_len}")
-        print(f"   - Training tokens: {len(unmasked_indices)}")
-        print(f"   - Training percentage: {len(unmasked_indices)/seq_len*100:.2f}%")
-        
-        if len(unmasked_indices) > 0:
-            # Decode what we're training on
-            unmasked_tokens = batch_output["input_ids"][batch_idx][unmasked_indices]
-            decoded_text = processor.tokenizer.decode(unmasked_tokens, skip_special_tokens=False)
-            # Clean up the decoded text for display
-            decoded_clean = decoded_text.replace('<|object_ref_start|>', '[OBJ_START]')
-            decoded_clean = decoded_clean.replace('<|object_ref_end|>', '[OBJ_END]')
-            decoded_clean = decoded_clean.replace('<|box_start|>', '[BOX_START]')
-            decoded_clean = decoded_clean.replace('<|box_end|>', '[BOX_END]')
-            print(f"   - Training on: '{decoded_clean}'")
-            
-            # Verify it's bbox coordinates
-            if 'nutrition-table' in decoded_text and '(' in decoded_text:
-                print(f"   ✅ Correctly training on bbox coordinates")
-            else:
-                print(f"   ⚠️ Warning: Unexpected training content")
-    
-    # Test forward pass
-    print("\n" + "-"*60)
-    print("Testing forward pass with model...")
-    print("-"*60)
-    
-    with torch.no_grad():
-        try:
-            # Move batch to GPU if available
-            if torch.cuda.is_available():
-                device = next(model.parameters()).device
-                batch_output_gpu = {}
-                for k, v in batch_output.items():
-                    if hasattr(v, 'to'):
-                        batch_output_gpu[k] = v.to(device)
-                    else:
-                        batch_output_gpu[k] = v
-            else:
-                batch_output_gpu = batch_output
-            
-            # Forward pass
-            outputs = model(**batch_output_gpu)
-            loss_value = outputs.loss.item() if outputs.loss is not None else None
-            
-            print("✅ Forward pass successful!")
-            if loss_value is not None:
-                print(f"   Loss: {loss_value:.4f}")
-                if loss_value > 10:
-                    print("   ⚠️ Warning: Loss is very high, training might be unstable")
-            else:
-                print("   ⚠️ Warning: No loss returned")
-                
-        except RuntimeError as e:
-            if "cu_seqlens_q must have dtype int32" in str(e):
-                print(f"❌ Flash Attention dtype error detected!")
-                print("   This is the known issue with Flash Attention version mismatch")
-                print("   Solution: Upgrade Flash Attention to 2.6.3")
-                print("   Command: pip install flash-attn==2.6.3 --no-build-isolation")
-            else:
-                print(f"❌ Forward pass failed: {e}")
-            import traceback
-            traceback.print_exc()
-        except Exception as e:
-            print(f"❌ Forward pass failed with unexpected error: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    print("="*60 + "\n")
-    return batch_output
-
-
-
-# %%
-# Run the debug test
-print("Running debug test on collate_fn_fixed_2...")
-test_output = debug_collate_fn(collate_fn_fixed_2, train_dataset_formatted, num_samples=2)
-
-# If the test fails with cu_seqlens_q error, we know it's Flash Attention version issue
-if test_output is None:
-    print("\n" + "="*60)
-    print("⚠️ NEXT STEPS:")
-    print("="*60)
-    print("1. The collate_fn_fixed_2 is working correctly")
-    print("2. The error is likely due to Flash Attention version mismatch")
-    print("3. Run: pip install flash-attn==2.6.3 --no-build-isolation")
-    print("4. Restart the kernel after installation")
-    print("5. Re-run from model loading onwards")
-    print("="*60)
 
 # %%
 # Clean collate_fn_fixed_3 class that only trains on assistant responses
@@ -3364,77 +2799,20 @@ class collate_fn_fixed_3:
 
 print("✅ Created collate_fn_fixed_3 - clean assistant-only training")
 
-# %%
-# Test collate_fn_fixed_3 and verify coordinate scaling
-def test_collate_fn_fixed_3():
-    """Test the new collator and verify coordinate scaling."""
-    print("\n" + "="*60)
-    print("TESTING collate_fn_fixed_3 & COORDINATE SCALING")
-    print("="*60)
-    
-    # Create collator instance
-    # Note: processor and model should already be loaded from earlier cells
-    # We commented out the clear_memory() calls to preserve them
-    collator = collate_fn_fixed_3(processor, model)
-    collator.debug = True  # Enable debug output
-    
-    # Test with first sample
-    # Note: train_dataset_formatted should be available from data preprocessing cells
-    test_batch = [train_dataset_formatted[0]]
-    
-    print("\n1. TESTING COLLATOR:")
-    try:
-        output = collator(test_batch)
-        print("✅ Collator executed successfully")
-        
-        # Check what we're training on
-        labels = output['labels'][0]
-        trained_indices = (labels != -100).nonzero(as_tuple=True)[0]
-        print(f"   Training on {len(trained_indices)} tokens out of {len(labels)} total")
-        
-    except Exception as e:
-        print(f"❌ Collator failed: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n2. COORDINATE SCALING CHECK:")
-    print("-" * 40)
-    
-    # Check a sample to verify coordinate scaling
-    example = train_dataset[0]
-    bbox = example['objects']['bbox'][0]
-    
-    print(f"Original bbox (normalized [0,1]): {bbox}")
-    
-    # Show how we convert for training
-    y_min, x_min, y_max, x_max = bbox
-    x1 = int(x_min * 1000)
-    y1 = int(y_min * 1000)
-    x2 = int(x_max * 1000)
-    y2 = int(y_max * 1000)
-    
-    print(f"Converted for training ([0,1000)): ({x1},{y1}),({x2},{y2})")
-    print(f"Format in training data: <|box_start|>({x1},{y1}),({x2},{y2})<|box_end|>")
-    
-    print("\n✅ COORDINATE SCALING IS CORRECT:")
-    print("   - Dataset provides bbox in [0,1] format")
-    print("   - We convert to [0,1000) for training (Qwen2-VL expects this)")
-    print("   - Model should output in [0,1000) format")
-    print("   - parse_qwen_bbox_output expects [0,1000) and converts back")
-    
-    print("\n3. WHY MODEL MIGHT PREDICT NO BOX:")
-    print("-" * 40)
-    print("   Possible reasons:")
-    print("   1. Training on static prompts (70% of tokens) - poor learning signal")
-    print("   2. Loss plateaued at ~3.25 - model not improving")
-    print("   3. Need more epochs or higher learning rate")
-    print("   4. Should use collate_fn_fixed_3 for assistant-only training")
-    
-    return collator
-
-# Run the test
-print("\n📊 Testing new collator and coordinate system...")
-test_collator = test_collate_fn_fixed_3()
+# =============================================================================
+# DELETED FOR CLEANNESS: test_collate_fn_fixed_3
+#
+# For reference:
+#   - Import: from src.data.collators import test_collate_fn_fixed_3
+#   - Or copy from: src/data/collators.py (under "BACKUP/DRAFT COLLATORS" section)
+#
+# Original structure:
+#   def test_collate_fn_fixed_3():  # ~65 lines - test function for coordinate scaling verification
+#
+# Example usage (after importing):
+#   # from src.data.collators import test_collate_fn_fixed_3
+#   # test_collator = test_collate_fn_fixed_3()
+# =============================================================================
 
 # %%
 # ================================================================================
