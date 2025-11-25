@@ -225,6 +225,64 @@ def setup_gpus(use_dual_gpu=True, max_gpus=2, verbose=True):
         sys.exit(1)
 
 
+def clear_memory(verbose: bool = True):
+    """
+    Clear GPU memory and run garbage collection.
+
+    This function:
+    1. Deletes common training variables from global scope
+    2. Runs Python garbage collection
+    3. Empties CUDA cache
+    4. Synchronizes CUDA operations
+
+    Args:
+        verbose: Print memory usage after clearing (default: True)
+
+    Usage:
+        >>> from src.utils.gpu import clear_memory
+        >>> clear_memory()
+        GPU allocated memory: 0.12 GB
+        GPU reserved memory: 0.50 GB
+
+    Note:
+        Call this between training runs or when switching models
+        to free up GPU memory. The sleep intervals help ensure
+        memory is fully released.
+    """
+    import gc
+    import time
+    import torch
+
+    # Delete variables if they exist in the current global scope
+    # Note: This only works for variables in the caller's global scope
+    # if called from the main script
+    global_vars_to_clear = ['inputs', 'model', 'processor', 'trainer', 'peft_model', 'bnb_config']
+
+    import inspect
+    caller_globals = inspect.currentframe().f_back.f_globals
+    for var_name in global_vars_to_clear:
+        if var_name in caller_globals:
+            del caller_globals[var_name]
+
+    time.sleep(2)
+
+    # Garbage collection and clearing CUDA memory
+    gc.collect()
+    time.sleep(2)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        time.sleep(2)
+
+    gc.collect()
+    time.sleep(2)
+
+    if verbose and torch.cuda.is_available():
+        print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+        print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+
+
 # For backward compatibility - standalone script execution
 if __name__ == "__main__":
     # Default configuration from original script
