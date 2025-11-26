@@ -2572,13 +2572,13 @@ print(f"IoU > 0.5 Improvement: {(metrics_finetuned['iou_threshold_0.5'] - metric
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
 # IoU distribution comparison
-axes[0].hist(ious_base, bins=20, alpha=0.5, label='Base Model', edgecolor='black')
-axes[0].hist(ious_finetuned, bins=20, alpha=0.5, label='Fine-tuned Model', edgecolor='black')
-axes[0].set_xlabel('IoU Score')
-axes[0].set_ylabel('Number of Samples')
-axes[0].set_title('IoU Distribution Comparison')
-axes[0].legend()
-axes[0].grid(True, alpha=0.3)
+_ = axes[0].hist(ious_base, bins=20, alpha=0.5, label='Base Model', edgecolor='black')
+_ = axes[0].hist(ious_finetuned, bins=20, alpha=0.5, label='Fine-tuned Model', edgecolor='black')
+_ = axes[0].set_xlabel('IoU Score')
+_ = axes[0].set_ylabel('Number of Samples')
+_ = axes[0].set_title('IoU Distribution Comparison')
+_ = axes[0].legend()
+_ = axes[0].grid(True, alpha=0.3)
 
 # Metrics comparison bar chart
 metrics_names = ['Mean IoU', 'Detection Rate', 'IoU > 0.5', 'IoU > 0.7']
@@ -2598,15 +2598,15 @@ finetuned_values = [
 x = np.arange(len(metrics_names))
 width = 0.35
 
-axes[1].bar(x - width/2, base_values, width, label='Base Model', alpha=0.8)
-axes[1].bar(x + width/2, finetuned_values, width, label='Fine-tuned Model', alpha=0.8)
-axes[1].set_xlabel('Metrics')
-axes[1].set_ylabel('Score')
-axes[1].set_title('Model Performance Comparison')
-axes[1].set_xticks(x)
-axes[1].set_xticklabels(metrics_names, rotation=45, ha='right')
-axes[1].legend()
-axes[1].grid(True, alpha=0.3, axis='y')
+_ = axes[1].bar(x - width/2, base_values, width, label='Base Model', alpha=0.8)
+_ = axes[1].bar(x + width/2, finetuned_values, width, label='Fine-tuned Model', alpha=0.8)
+_ = axes[1].set_xlabel('Metrics')
+_ = axes[1].set_ylabel('Score')
+_ = axes[1].set_title('Model Performance Comparison')
+_ = axes[1].set_xticks(x)
+_ = axes[1].set_xticklabels(metrics_names, rotation=45, ha='right')
+_ = axes[1].legend()
+_ = axes[1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
 plt.show()
@@ -2988,19 +2988,22 @@ from trl import SFTTrainer
 
 print("\n🎯 Creating second SFTTrainer with assistant-only training...")
 
+# BUG FIX (2025-11-25): Same fix as first trainer - pass peft_config instead of
+# assuming model already has LoRA adapters. This prevents the double-preparation bug.
 trainer_v3 = SFTTrainer(
-    model=model,  # Use the same model (already has LoRA adapters from first training)
+    model=model,  # Base model - SFTTrainer will handle LoRA setup
     args=training_args_v3,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
     data_collator=collate_fn_v3,  # Using collate_fn_fixed_3 for assistant-only
     processing_class=processor,
+    peft_config=lora_config,  # BUG FIX: Let SFTTrainer handle LoRA setup properly
 )
 
 print("✅ Second SFTTrainer created successfully")
 print(f"   Total training samples: {len(train_dataset_formatted)}")
 print(f"   Total evaluation samples: {len(eval_dataset_formatted)}")
-print(f"   Training will continue from the first trainer's checkpoint")
+print(f"   Training with assistant-only collator (collate_fn_fixed_3)")
 
 # Calculate training steps
 steps_per_epoch = len(train_dataset_formatted) // (training_args_v3.per_device_train_batch_size * training_args_v3.gradient_accumulation_steps)
@@ -3008,15 +3011,27 @@ total_steps = steps_per_epoch * training_args_v3.num_train_epochs
 print(f"   Steps per epoch: {steps_per_epoch}")
 print(f"   Total training steps: {total_steps}")
 
-# Attach the same diagnostics callbacks with explicit trainer binding
-_iou_cb_v3 = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
-_iou_cb_v3.trainer = trainer_v3
-trainer_v3.add_callback(_iou_cb_v3)
+# DEBUG: Check if LoRA parameters are trainable after SFTTrainer creation
+print("\n" + "="*60)
+print("CHECKING TRAINABLE PARAMETERS AFTER trainer_v3 CREATION")
+print("="*60)
+trainer_v3.model.print_trainable_parameters()
+# If this shows 0 trainable params, the bug is still present
 
-_grad_cb_v3 = GradNormCallback()
-_grad_cb_v3.trainer = trainer_v3
-trainer_v3.add_callback(_grad_cb_v3)
-trainer_v3.add_callback(ConsoleLogCallback())  # prints selected metrics to console for notebook readability
+# =============================================================================
+# COMMENTED OUT: Callback usage (requires import from src.training.callbacks)
+#
+# To re-enable:
+#   from src.training.callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
+#
+# _iou_cb_v3 = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
+# _iou_cb_v3.trainer = trainer_v3
+# trainer_v3.add_callback(_iou_cb_v3)
+# _grad_cb_v3 = GradNormCallback()
+# _grad_cb_v3.trainer = trainer_v3
+# trainer_v3.add_callback(_grad_cb_v3)
+# trainer_v3.add_callback(ConsoleLogCallback())
+# =============================================================================
 
 # %%
 # Launch the second training
@@ -3044,3 +3059,32 @@ print("\nYou now have two trained models:")
 print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
 print(f"2. Assistant-only: {training_args_v3.output_dir}")
 print("\nCompare their performance to see which approach works better!")
+
+# %%
+# Load and evaluate v3 model
+model_finetuned_v3 = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct",
+    torch_dtype=torch.bfloat16,
+    device_map="balanced",
+    attn_implementation="flash_attention_2",
+)
+model_finetuned_v3 = PeftModel.from_pretrained(
+    model_finetuned_v3,
+    training_args_v3.output_dir,
+    torch_dtype=torch.bfloat16,
+)
+processor_finetuned_v3 = Qwen2VLProcessor.from_pretrained(training_args_v3.output_dir)
+
+metrics_v3, ious_v3 = evaluate_model(
+    model_finetuned_v3,
+    processor_finetuned_v3,
+    eval_dataset,
+    num_samples=50
+)
+
+print("\nModel v3 IoU Statistics:")
+print(f"  Mean IoU: {metrics_v3['mean_iou']:.4f}")
+print(f"  Median IoU: {metrics_v3['median_iou']:.4f}")
+print(f"  Detection Rate: {metrics_v3['detection_rate']:.2%}")
+print(f"  IoU > 0.5: {metrics_v3['iou_threshold_0.5']:.2%}")
+print(f"  IoU > 0.7: {metrics_v3['iou_threshold_0.7']:.2%}")
