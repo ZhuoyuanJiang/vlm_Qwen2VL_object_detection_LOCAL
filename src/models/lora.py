@@ -69,7 +69,29 @@ def create_lora_config(
 
 def apply_lora(model, lora_config: Optional[LoraConfig] = None, verbose: bool = True):
     """
-    Apply LoRA adapters to model.
+    LEGACY FUNCTION - For TRL < 0.21 only.
+
+    ⚠️ WARNING: Do NOT use with TRL 0.22+ and SFTTrainer!
+    ============================================================
+    Instead, pass lora_config directly to SFTTrainer via peft_config.
+    Using apply_lora() + SFTTrainer causes trainable params = 0.
+
+    See GitHub issue: https://github.com/huggingface/trl/issues/3926
+
+    CORRECT PATTERN (TRL 0.22+):
+        from src.models.loader import load_quantized_model
+        from src.models.lora import create_lora_config
+        from trl import SFTTrainer
+
+        model, processor = load_quantized_model()
+        lora_config = create_lora_config()  # Just create config, don't apply!
+        trainer = SFTTrainer(
+            model=model,  # Pass base model, NOT PeftModel
+            peft_config=lora_config,  # Let SFTTrainer handle LoRA
+            ...
+        )
+        # DON'T call prepare_for_kbit_training() or apply_lora()
+    ============================================================
 
     This function applies LoRA (Low-Rank Adaptation) adapters to the model,
     enabling parameter-efficient fine-tuning.
@@ -84,17 +106,15 @@ def apply_lora(model, lora_config: Optional[LoraConfig] = None, verbose: bool = 
 
     Note:
         For TRL 0.12.0, LoRA must be applied manually using get_peft_model().
-        Newer TRL versions can accept peft_config directly in SFTTrainer.
+        TRL 0.21+ handles this via SFTTrainer's peft_config parameter.
 
-    Example:
+    Example (LEGACY - TRL < 0.21 only):
         >>> from src.models.loader import load_quantized_model, prepare_for_kbit_training
         >>> from src.models.lora import apply_lora
         >>>
         >>> model, processor = load_quantized_model()
-        >>> model = prepare_for_kbit_training(model)
-        >>> model = apply_lora(model)  # Uses default config
-        >>> # Or with custom config:
-        >>> model = apply_lora(model, create_lora_config(r=32))
+        >>> model = prepare_for_kbit_training(model)  # LEGACY
+        >>> model = apply_lora(model)  # LEGACY
     """
     from src.utils.debug import summarize_trainables
 

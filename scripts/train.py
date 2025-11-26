@@ -11,6 +11,12 @@ Usage:
 Requirements:
     - GPU with 40GB+ VRAM (or 2x GPUs with 24GB each)
     - wandb account (optional, can disable)
+    - TRL 0.21+ (uses peft_config pattern, not manual LoRA)
+
+NOTE (TRL 0.22+ compatibility):
+    This script passes peft_config to SFTTrainer and lets it handle LoRA setup.
+    Do NOT call prepare_for_kbit_training() or apply_lora() manually - this causes
+    trainable params = 0 bug. See: https://github.com/huggingface/trl/issues/3926
 """
 
 # =============================================================================
@@ -28,8 +34,8 @@ from trl import SFTTrainer
 import wandb
 
 # Import our extracted modules
-from src.models.loader import load_quantized_model, prepare_for_kbit_training
-from src.models.lora import create_lora_config, apply_lora
+from src.models.loader import load_quantized_model  # Don't import prepare_for_kbit_training (legacy)
+from src.models.lora import create_lora_config  # Don't import apply_lora (legacy)
 from src.training.config import create_sft_config, print_training_config
 from src.data.collators import collate_fn_fixed_fixed1
 from src.data.dataset import convert_to_conversation_format, _has_image
@@ -104,27 +110,34 @@ print("\n" + "="*60)
 print("STEP 2: Loading Model with 4-bit Quantization")
 print("="*60)
 
+# NOTE: use_flash_attention=False (sdpa) is safer for training
+# flash_attention_2 can be used for inference only
 model, processor = load_quantized_model(
     model_id=CONFIG["model_id"],
     device_map="balanced",
-    use_flash_attention=True,
+    use_flash_attention=False,  # Use sdpa for training
 )
 
 # =============================================================================
-# STEP 3: Prepare for Training and Apply LoRA
+# STEP 3: Create LoRA Configuration
 # =============================================================================
 print("\n" + "="*60)
-print("STEP 3: Preparing Model and Applying LoRA")
+print("STEP 3: Creating LoRA Configuration")
 print("="*60)
 
-model = prepare_for_kbit_training(model)
+# NOTE: For TRL 0.22+, we DON'T call prepare_for_kbit_training() or apply_lora()
+# SFTTrainer handles this internally when we pass peft_config
+# See: https://github.com/huggingface/trl/issues/3926
 
 lora_config = create_lora_config(
     r=CONFIG["lora_r"],
     lora_alpha=CONFIG["lora_alpha"],
     lora_dropout=CONFIG["lora_dropout"],
 )
-model = apply_lora(model, lora_config)
+print(f"LoRA config created (will be applied by SFTTrainer)")
+print(f"  Rank: {lora_config.r}")
+print(f"  Alpha: {lora_config.lora_alpha}")
+print(f"  Dropout: {lora_config.lora_dropout}")
 
 # =============================================================================
 # STEP 4: Create Training Configuration
@@ -188,16 +201,28 @@ print("\n" + "="*60)
 print("STEP 7: Creating SFTTrainer and Starting Training")
 print("="*60)
 
+# IMPORTANT: Pass peft_config to let SFTTrainer handle LoRA setup
+# DO NOT manually call prepare_for_kbit_training() or apply_lora()
+# See: https://github.com/huggingface/trl/issues/3926
 trainer = SFTTrainer(
-    model=model,
+    model=model,  # Base quantized model (NOT a PeftModel)
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
     data_collator=collate_fn,
     processing_class=processor,
+    peft_config=lora_config,  # Let SFTTrainer handle LoRA setup
 )
 
-print(f"Total training samples: {len(train_dataset_formatted)}")
+# CRITICAL: Verify trainable parameters after SFTTrainer creation
+# Should show ~161M trainable params (1.9%), NOT 0!
+print("\n" + "="*60)
+print("VERIFYING TRAINABLE PARAMETERS")
+print("="*60)
+trainer.model.print_trainable_parameters()
+# If this shows 0 trainable params, something is wrong!
+
+print(f"\nTotal training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 effective_batch = CONFIG["per_device_train_batch_size"] * CONFIG["gradient_accumulation_steps"]
 steps_per_epoch = len(train_dataset_formatted) // effective_batch

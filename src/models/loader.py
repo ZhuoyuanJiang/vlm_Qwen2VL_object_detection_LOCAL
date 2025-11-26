@@ -44,7 +44,7 @@ def create_bnb_config():
 def load_quantized_model(
     model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
     device_map: str = "balanced",
-    use_flash_attention: bool = True,
+    use_flash_attention: bool = False,
     min_pixels: int = 256 * 28 * 28,
     max_pixels: int = 1280 * 28 * 28,
 ):
@@ -57,7 +57,10 @@ def load_quantized_model(
             - "balanced": Evenly distribute across available GPUs
             - "auto": Let accelerate decide
             - "sequential": Fill GPUs sequentially
-        use_flash_attention: Whether to use Flash Attention 2 (recommended)
+        use_flash_attention: Whether to use Flash Attention 2.
+            - False (default): Uses "sdpa" - RECOMMENDED FOR TRAINING
+            - True: Uses "flash_attention_2" - OK for inference only
+            NOTE: For training, use sdpa. flash_attention_2 may cause issues.
         min_pixels: Minimum pixels for image processing (~200k default)
         max_pixels: Maximum pixels for image processing (~1M default)
 
@@ -65,8 +68,10 @@ def load_quantized_model(
         Tuple[model, processor]: Loaded model and processor
 
     Example:
-        >>> model, processor = load_quantized_model()
-        >>> print(f"Memory: {model.get_memory_footprint() / 1024**3:.2f} GB")
+        >>> # For training (recommended)
+        >>> model, processor = load_quantized_model(use_flash_attention=False)
+        >>> # For inference only
+        >>> model, processor = load_quantized_model(use_flash_attention=True)
     """
     bnb_config = create_bnb_config()
 
@@ -100,7 +105,24 @@ def load_quantized_model(
 
 def prepare_for_kbit_training(model, verbose: bool = True):
     """
-    Prepare quantized model for k-bit training.
+    LEGACY FUNCTION - For TRL < 0.21 only.
+
+    ⚠️ WARNING: Do NOT use with TRL 0.22+ and SFTTrainer!
+    ============================================================
+    SFTTrainer handles this internally when you pass peft_config.
+    Using this function with SFTTrainer will cause:
+        - trainable params = 0 (frozen LoRA)
+        - validation loss stays flat
+        - model learns nothing
+
+    See GitHub issue: https://github.com/huggingface/trl/issues/3926
+
+    CORRECT PATTERN (TRL 0.22+):
+        model, processor = load_quantized_model()
+        lora_config = create_lora_config()
+        trainer = SFTTrainer(model=model, peft_config=lora_config, ...)
+        # DON'T call prepare_for_kbit_training() or apply_lora()
+    ============================================================
 
     This function wraps peft's prepare_model_for_kbit_training() with
     optional verbose output showing parameter counts before and after.
@@ -117,11 +139,11 @@ def prepare_for_kbit_training(model, verbose: bool = True):
 
     Note:
         For TRL version 0.12.0, this must be called manually before
-        applying LoRA. Newer TRL versions (0.21+) do this automatically.
+        applying LoRA. TRL 0.21+ does this automatically via SFTTrainer.
 
-    Example:
+    Example (LEGACY - TRL < 0.21 only):
         >>> model, processor = load_quantized_model()
-        >>> model = prepare_for_kbit_training(model)
+        >>> model = prepare_for_kbit_training(model)  # LEGACY
         >>> # Now ready for LoRA application
     """
     from src.utils.debug import summarize_trainables
