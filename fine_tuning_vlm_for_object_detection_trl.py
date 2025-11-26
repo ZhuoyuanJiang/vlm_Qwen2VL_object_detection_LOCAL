@@ -1430,16 +1430,25 @@ def _summarize_trainables(model_to_summarize):
     except Exception as error:
         print(f"[warn] could not summarize trainables: {error}")
 
-# Trainables snapshot BEFORE k-bit preparation
-print("=== Before prepare_model_for_kbit_training ===")
-_summarize_trainables(model)
-
-model = prepare_model_for_kbit_training(model)
-print("\n✅ Model prepared for k-bit training")
-
-# Trainables snapshot AFTER k-bit preparation
-print("\n=== After prepare_model_for_kbit_training ===")
-_summarize_trainables(model)
+# =============================================================================
+# COMMENTED OUT: Manual prepare_model_for_kbit_training
+#
+# BUG FIX (2025-11-25): SFTTrainer internally calls prepare_model_for_kbit_training
+# when it detects QLoRA (see trl/models/utils.py:prepare_peft_model lines 23-29).
+# If we call it manually AND pass a PeftModel to SFTTrainer, SFTTrainer calls it
+# AGAIN on the PeftModel, which freezes ALL parameters including LoRA (trainable=0).
+#
+# Solution: Let SFTTrainer handle this by passing peft_config instead of
+# manually creating a PeftModel.
+#
+# See: https://github.com/huggingface/trl/issues/3926
+# =============================================================================
+# print("=== Before prepare_model_for_kbit_training ===")
+# _summarize_trainables(model)
+# model = prepare_model_for_kbit_training(model)
+# print("\n✅ Model prepared for k-bit training")
+# print("\n=== After prepare_model_for_kbit_training ===")
+# _summarize_trainables(model)
 
 # %% [markdown] id="65wfO29isQlX"
 # ## Set Up QLoRA and SFTConfig 🚀
@@ -1490,17 +1499,25 @@ print(f"  Alpha: {lora_config.lora_alpha}")
 print(f"  Dropout: {lora_config.lora_dropout}")
 print(f"  Target modules: {lora_config.target_modules}")
 
-# For TRL 0.12.0, we need to manually apply get_peft_model
-model = get_peft_model(model, lora_config)
-print("\n✅ LoRA adapters attached to model")
+# =============================================================================
+# COMMENTED OUT: Manual get_peft_model
+#
+# BUG FIX (2025-11-25): Same issue as prepare_model_for_kbit_training above.
+# SFTTrainer will call get_peft_model internally when we pass peft_config.
+# If we call it manually, SFTTrainer's prepare_peft_model will call
+# prepare_model_for_kbit_training on our PeftModel, freezing all params.
+#
+# Solution: Pass lora_config to SFTTrainer via peft_config parameter instead.
+# =============================================================================
+# model = get_peft_model(model, lora_config)
+# print("\n✅ LoRA adapters attached to model")
+# print("\n=== PEFT's parameter count (includes full base model) ===")
+# model.print_trainable_parameters()
+# print("\n=== After get_peft_model (LoRA attached) - Custom count ===")
+# _summarize_trainables(model)
 
-# Note: model.print_trainable_parameters() counts differently than our custom function
-# PEFT's method includes the full base model size in total, our function only counts accessible parameters
-print("\n=== PEFT's parameter count (includes full base model) ===")
-model.print_trainable_parameters()
-
-print("\n=== After get_peft_model (LoRA attached) - Custom count ===")
-_summarize_trainables(model)
+print("\n✅ LoRA config created (will be applied by SFTTrainer)")
+print("   Note: We pass peft_config to SFTTrainer instead of manually calling get_peft_model")
 
 # %% [markdown] id="A1t7Hk_f7JGn"
 # Next, you need to create an SFT config for model finetuning. This step is critical for model convergence.
@@ -2122,23 +2139,33 @@ from trl import SFTTrainer
 # TASK: Create the SFT trainer and launch training
 
 # Create the trainer
-# For TRL 0.12.0: We already manually:
-# 1. Called prepare_model_for_kbit_training()
-# 2. Applied get_peft_model() with LoRA config
-# So we DON'T pass peft_config to SFTTrainer (model is already a PEFT model)
+# =============================================================================
+# ORIGINAL COMMENTS (no longer applicable for TRL 0.22.0.dev0):
+# # For TRL 0.12.0: We already manually:
+# # 1. Called prepare_model_for_kbit_training()
+# # 2. Applied get_peft_model() with LoRA config
+# # So we DON'T pass peft_config to SFTTrainer (model is already a PEFT model)
+# =============================================================================
+#
+# BUG FIX (2025-11-25): The above approach causes trainable params = 0 in TRL 0.22.0.dev0!
+# SFTTrainer internally calls prepare_peft_model() which calls prepare_model_for_kbit_training()
+# again on our PeftModel, freezing ALL parameters including LoRA adapters.
+# Solution: Pass peft_config to SFTTrainer and let it handle LoRA setup.
+# See: https://github.com/huggingface/trl/issues/3926
 
 # CRITICAL: We're NOT using gradient checkpointing at all
 # It breaks gradient flow with LoRA + quantization
 # training_args.gradient_checkpointing is already False in the config
 
 trainer = SFTTrainer(
-    model=model,  # Already a PEFT model with LoRA adapters
+    model=model,  # Base quantized model (NOT a PeftModel anymore)
     args=training_args,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
     data_collator=collate_fn,  # Using the FIXED collate_fn with Flash Attention dtype patch
     processing_class=processor,  # Use full processor (not just tokenizer) for consistency
-    # Note: NO peft_config here since we already applied get_peft_model manually
+    peft_config=lora_config,  # BUG FIX: Let SFTTrainer handle LoRA setup properly
+    # # Note: NO peft_config here since we already applied get_peft_model manually  # OLD - caused bug
 )
 
 print("SFTTrainer created successfully")
@@ -2146,6 +2173,16 @@ print(f"Total training samples: {len(train_dataset_formatted)}")
 print(f"Total evaluation samples: {len(eval_dataset_formatted)}")
 print(f"Number of training steps: {len(train_dataset_formatted) // (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps) * training_args.num_train_epochs}")
 
+
+
+
+# %%
+# DEBUG: Check if LoRA parameters are trainable after SFTTrainer creation
+print("\n" + "="*60)
+print("CHECKING TRAINABLE PARAMETERS AFTER SFTTrainer CREATION")
+print("="*60)
+trainer.model.print_trainable_parameters()
+# If this shows 0 trainable params, the bug is still present
 
 # %%
 # # Attach diagnostics: IoU evaluation + gradient norm monitor
