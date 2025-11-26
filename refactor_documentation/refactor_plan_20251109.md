@@ -535,3 +535,48 @@ Why?
 - Separate detailed explorations into focused notebooks
 - Prioritize clarity and learning value over minimal line count
 - This structure is industry-standard for ML research and production
+
+---
+
+## Update: November 26, 2025
+
+### Completed Items (Sessions 1-14)
+
+**Notebooks:**
+- ✅ `01_dataset_exploration.ipynb` - Dataset EDA
+- ✅ `02_model_understanding.ipynb` - Model testing & inference
+- ✅ `03_verify_refactored_modules.ipynb` - Module verification (temporary)
+- ✅ `04_evaluation_analysis.ipynb` - Post-training evaluation (NEW)
+- ⏭️ `03_training_comparison.ipynb` - SKIPPED (main notebook covers this)
+
+**`src/` Modules (All Complete):**
+- ✅ `src/data/dataset.py`, `collators.py`
+- ✅ `src/models/loader.py`, `inference.py`, `lora.py`
+- ✅ `src/training/config.py`, `callbacks.py`, `evaluation.py`
+- ✅ `src/utils/gpu.py`, `visualization.py`, `debug.py`
+
+### Revised Priorities
+
+After evaluation, the following items from the original plan are **deprioritized** for an educational project:
+
+| Original Item | Status | Reason |
+|---------------|--------|--------|
+| `configs/` YAML files | ⏭️ SKIP | Config functions with docstrings are more educational |
+| `scripts/evaluate.py` | ⏭️ SKIP | Covered by `04_evaluation_analysis.ipynb` |
+| `scripts/inference.py` | ⏭️ SKIP | `src/models/inference.py` is sufficient |
+| `scripts/merge_lora.py` | ⏭️ SKIP | 5 lines, fine in main notebook |
+| `tests/` | ⏭️ SKIP | Working code + notebooks are sufficient for teaching |
+
+### Remaining (Optional)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| `scripts/train.py` | LOW | CLI for `python train.py --config X` - nice to have |
+| Delete duplicate collators | USER | User will clean up main file |
+
+### Key Insight
+
+The original plan was designed for **production-grade ML**. For an **educational open-source project**, the notebook-based workflow is actually preferable:
+- Students learn interactively
+- Code is self-documenting with outputs
+- No need for CLI complexity
