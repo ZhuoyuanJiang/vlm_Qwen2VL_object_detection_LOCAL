@@ -283,6 +283,71 @@ def clear_memory(verbose: bool = True):
         print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
 
 
+def check_flash_attention_version(verbose: bool = True) -> bool:
+    """
+    Check Flash Attention version compatibility with Qwen2-VL.
+
+    Qwen2-VL requires Flash Attention >= 2.5.0 for proper operation.
+    This function checks the installed version and warns if incompatible.
+
+    Args:
+        verbose: Print version information and warnings (default: True)
+
+    Returns:
+        bool: True if version is compatible, False otherwise
+
+    Example:
+        >>> from src.utils.gpu import check_flash_attention_version
+        >>> is_compatible = check_flash_attention_version()
+        Flash Attention version: 2.6.3
+        ✅ Flash Attention version is compatible
+
+    Note:
+        To fix incompatible versions, run:
+        pip install flash-attn==2.6.3 --no-build-isolation
+    """
+    import torch
+
+    if verbose:
+        print("\n" + "="*60)
+        print("CHECKING FLASH ATTENTION AND ENVIRONMENT")
+        print("="*60)
+
+    try:
+        import flash_attn
+        flash_version = flash_attn.__version__
+
+        if verbose:
+            print(f"Flash Attention version: {flash_version}")
+            print(f"PyTorch version: {torch.__version__}")
+            print(f"CUDA version: {torch.version.cuda}")
+            print(f"CUDA available: {torch.cuda.is_available()}")
+            if torch.cuda.is_available():
+                print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+
+        # Check if version is sufficient for Qwen2-VL
+        major, minor = map(int, flash_version.split('.')[:2])
+        is_compatible = not (major < 2 or (major == 2 and minor < 5))
+
+        if verbose:
+            if not is_compatible:
+                print("\n⚠️ WARNING: Flash Attention version is too old for Qwen2-VL!")
+                print("   Required: >= 2.5.0")
+                print("   To fix, run: pip install flash-attn==2.6.3 --no-build-isolation")
+            else:
+                print("✅ Flash Attention version is compatible")
+            print("="*60 + "\n")
+
+        return is_compatible
+
+    except ImportError:
+        if verbose:
+            print("❌ Flash Attention is not installed!")
+            print("   To install, run: pip install flash-attn==2.6.3 --no-build-isolation")
+            print("="*60 + "\n")
+        return False
+
+
 # For backward compatibility - standalone script execution
 if __name__ == "__main__":
     # Default configuration from original script

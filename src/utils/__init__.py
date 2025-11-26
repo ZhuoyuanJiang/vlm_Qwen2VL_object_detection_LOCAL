@@ -7,9 +7,9 @@ This module provides:
 - Debug utilities (debug.py)
 """
 
-from .gpu import find_available_gpus, setup_gpus, find_best_fallback_gpu, clear_memory
+from .gpu import find_available_gpus, setup_gpus, find_best_fallback_gpu, clear_memory, check_flash_attention_version
 from .visualization import visualize_bbox_on_image
-from .debug import summarize_trainables
+from .debug import summarize_trainables, analyze_token_distribution
 
 __all__ = [
     # GPU utilities
@@ -17,8 +17,10 @@ __all__ = [
     "setup_gpus",
     "find_best_fallback_gpu",
     "clear_memory",
+    "check_flash_attention_version",
     # Visualization
     "visualize_bbox_on_image",
     # Debug
     "summarize_trainables",
+    "analyze_token_distribution",
 ]

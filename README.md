@@ -62,6 +62,38 @@ pip install trl==0.10.1
 - `DETAILED_SESSION_LOG.md` - Complete setup history
 - `requirements.txt` - Dependencies
 
+## 🔁 Notebook ⇄ Script Sync (Jupytext)
+
+- One-time pairing (sets formats on the notebook):
+  ```bash
+  jupytext --set-formats ipynb,py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
+  ```
+
+- Ongoing sync (both directions; updates the older file from the newer one):
+  ```bash
+  jupytext --sync /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb | cat
+  ```
+
+- Directional sync (optional control):
+  - ipynb → py
+    ```bash
+    jupytext --to py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
+    ```
+  - py → ipynb
+    ```bash
+    jupytext --to ipynb /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.py
+    ```
+
+- Optional repo config (so you don’t need --set-formats again):
+  ```bash
+  printf 'formats = "ipynb,py:percent"\n' > /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/.jupytext.toml
+  ```
+
+- Activate env only if your shell isn’t already in it:
+  ```bash
+  source /home/zhuoyuan/miniconda3/etc/profile.d/conda.sh && conda activate vlm_Qwen2VL_object_detection
+  ```
+
 ## 🔧 Configuration
 
 ### Model
@@ -85,10 +117,20 @@ pip install trl==0.10.1
 
 See `PROJECT_ANALYSIS.md` for detailed explanation of every parameter choice.
 
+### Experiment Tracking
+
+This project uses [Weights & Biases](https://wandb.ai/) for experiment tracking.
+When you first run training, you'll be prompted to login or create a free account.
+
+To skip the prompt if you already have WandB:
+```bash
+wandb login
+```
+
 ## 📊 Dataset
 
 Using nutrition table detection dataset from HuggingFace:
-- Training samples: ~5000
+- Training samples: ~1083
 - Task: Detect bounding boxes of nutrition tables
 - Format: Conversation-style with user prompts and assistant responses
 
