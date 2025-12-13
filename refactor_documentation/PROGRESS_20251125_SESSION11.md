@@ -110,6 +110,162 @@ def prepare_peft_model(model, peft_config, args):
 
 ---
 
+## Deep Dive: Understanding `prepare_model_for_kbit_training()`
+
+### What Does This Function Actually Do?
+
+This function from PEFT prepares a quantized model for training by:
+
+1. **Freezing ALL parameters** - Sets `requires_grad=False` for everything
+2. **Casting certain layers to float32** - For numerical stability
+3. **Enabling gradient checkpointing** (optional) - To save memory
+
+Here's the key logic (simplified):
+
+```python
+def prepare_model_for_kbit_training(model, ...):
+    # Step 1: Freeze ALL parameters in the model
+    for param in model.parameters():
+        param.requires_grad = False  # ← Freezes EVERYTHING it finds
+
+    # Step 2: Cast certain layers to float32 for stability
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.LayerNorm, nn.Embedding)):
+            module.to(torch.float32)
+
+    return model
+```
+
+### Clarification: Quantized Layers vs Entire Model
+
+In QLoRA (4-bit loading), **almost the entire model IS quantized**:
+
+```
+Model with load_in_4bit=True:
+┌─────────────────────────────────────────────┐
+│  QUANTIZED (4-bit):                         │
+│  ├── All Linear layers (~99% of params)     │
+│  │   ├── q_proj, k_proj, v_proj, o_proj     │
+│  │   ├── gate_proj, up_proj, down_proj      │
+│  │   └── ... (billions of parameters)       │
+│                                             │
+│  NOT QUANTIZED (kept in float32):           │
+│  ├── LayerNorm layers                       │
+│  ├── Embedding layers                       │
+│  └── (small fraction of params)             │
+└─────────────────────────────────────────────┘
+```
+
+So "quantized layers" ≈ "nearly the entire model" in practice.
+
+**However**, `prepare_model_for_kbit_training()` freezes **ALL parameters unconditionally** - not just quantized ones. The intent is: "Freeze everything now, add trainable LoRA adapters later."
+
+### Visual Timeline: Why It Works on Base Model (Before LoRA)
+
+```
+BEFORE prepare_model_for_kbit_training():
+┌─────────────────────────────────────┐
+│  Base Model (8B params)             │
+│  ├── q_proj: 4-bit quantized        │
+│  ├── k_proj: 4-bit quantized        │
+│  ├── v_proj: 4-bit quantized        │
+│  └── ... (all quantized weights)    │
+│                                     │
+│  NO LoRA adapters yet!              │
+└─────────────────────────────────────┘
+
+AFTER prepare_model_for_kbit_training():
+┌─────────────────────────────────────┐
+│  Base Model (8B params)             │
+│  ├── q_proj: FROZEN ❄️              │
+│  ├── k_proj: FROZEN ❄️              │
+│  ├── v_proj: FROZEN ❄️              │
+│  └── ... (all FROZEN)               │
+│                                     │
+│  Still no LoRA - room to add them!  │
+└─────────────────────────────────────┘
+
+AFTER get_peft_model():
+┌─────────────────────────────────────┐
+│  PeftModel                          │
+│  ├── base_model (FROZEN ❄️)         │
+│  │   ├── q_proj: FROZEN ❄️          │
+│  │   └── ...                        │
+│  │                                  │
+│  └── LoRA adapters (NEW! 🔥)        │
+│      ├── lora_A: requires_grad=True │
+│      ├── lora_B: requires_grad=True │
+│      └── 161M trainable params!     │
+└─────────────────────────────────────┘
+```
+
+**Key insight**: When `get_peft_model()` adds LoRA adapters, it creates **NEW parameters** that weren't frozen because they didn't exist yet!
+
+### Visual Timeline: Why It BREAKS on PeftModel (After LoRA)
+
+```
+BEFORE second prepare_model_for_kbit_training():
+┌─────────────────────────────────────┐
+│  PeftModel                          │
+│  ├── base_model (FROZEN ❄️)         │
+│  │   └── ...                        │
+│  │                                  │
+│  └── LoRA adapters (TRAINABLE 🔥)   │
+│      ├── lora_A: requires_grad=True │
+│      ├── lora_B: requires_grad=True │
+│      └── 161M trainable params!     │
+└─────────────────────────────────────┘
+
+AFTER second prepare_model_for_kbit_training():
+┌─────────────────────────────────────┐
+│  PeftModel                          │
+│  ├── base_model (FROZEN ❄️)         │
+│  │   └── ...                        │
+│  │                                  │
+│  └── LoRA adapters (NOW FROZEN! ❄️) │
+│      ├── lora_A: requires_grad=False│  ← PROBLEM!
+│      ├── lora_B: requires_grad=False│  ← PROBLEM!
+│      └── 0 trainable params!        │
+└─────────────────────────────────────┘
+```
+
+**The function doesn't know** the difference between:
+- Base model weights (should be frozen)
+- LoRA adapter weights (should stay trainable)
+
+It just iterates through **ALL parameters** and sets `requires_grad=False`.
+
+### Summary: Correct vs Buggy Flow
+
+```
+CORRECT FLOW (pass peft_config to SFTTrainer):
+───────────────────────────────────────────────
+Load Model → SFTTrainer handles everything internally
+             ├── prepare_model_for_kbit_training() ← Called ONCE on base
+             └── get_peft_model() ← Adds LoRA AFTER freezing
+
+Result: 161M trainable LoRA params ✓
+
+
+BUGGY FLOW (manual LoRA before SFTTrainer):
+───────────────────────────────────────────────
+Load Model
+    ↓
+prepare_model_for_kbit_training() ← 1st call (OK)
+    ↓
+get_peft_model() ← Adds LoRA (161M trainable) ✓
+    ↓
+Pass PeftModel to SFTTrainer
+    ↓
+SFTTrainer detects PeftModel + 4-bit
+    ↓
+prepare_model_for_kbit_training() ← 2nd call (BUG!)
+    ↓
+LoRA adapters FROZEN! 0 trainable params ✗
+```
+
+---
+
 ## The Fix
 
 ### Solution: Let SFTTrainer Handle LoRA Setup

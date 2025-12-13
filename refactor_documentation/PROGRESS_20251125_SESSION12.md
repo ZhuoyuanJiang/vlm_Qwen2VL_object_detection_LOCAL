@@ -170,7 +170,7 @@ wandb login
 
 ## Updated Project Structure
 
-```
+
 src/
 ├── __init__.py
 ├── data/
@@ -192,7 +192,7 @@ src/
     ├── gpu.py              # GPU utils + check_flash_attention_version
     ├── visualization.py    # visualize_bbox_on_image
     └── debug.py            # summarize_trainables + analyze_token_distribution
-```
+
 
 ---
 
