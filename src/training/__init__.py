@@ -7,14 +7,22 @@ This module provides:
 - Evaluation utilities (evaluation.py)
 """
 
-from .config import create_sft_config, print_training_config, create_assistant_only_training_config
+from .config import (
+    create_training_config,
+    print_training_config,
+    # Deprecated
+    create_sft_config,
+    create_assistant_only_training_config,
+)
 from .callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
 from .evaluation import evaluate_model, print_evaluation_results, compare_models
 
 __all__ = [
     # Config
-    "create_sft_config",
+    "create_training_config",
     "print_training_config",
+    # Deprecated config functions (kept for backwards compatibility)
+    "create_sft_config",
     "create_assistant_only_training_config",
     # Callbacks
     "GradNormCallback",

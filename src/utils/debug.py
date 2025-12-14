@@ -83,8 +83,8 @@ def analyze_token_distribution(collate_fn, dataset, processor, num_samples=3):
 
     Example:
         >>> from src.utils.debug import analyze_token_distribution
-        >>> from src.data.collators import collate_fn_fixed_1
-        >>> collator = collate_fn_fixed_1(processor, model)
+        >>> from src.data.collators import AllTokensCollator
+        >>> collator = AllTokensCollator(processor, model)
         >>> analyze_token_distribution(collator, train_dataset_formatted, processor, num_samples=3)
 
     Output shows:

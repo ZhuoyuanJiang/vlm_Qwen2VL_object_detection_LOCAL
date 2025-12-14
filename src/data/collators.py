@@ -18,15 +18,15 @@ QUICK REFERENCE - Classes and Functions in this module:
    - INPUT: Messages with 'IMAGE_PLACEHOLDER' + list of PIL images
    - OUTPUT: Messages with actual PIL images restored
 
-2. collate_fn_fixed_1 (class)
+2. AllTokensCollator (class)
    - Basic collator: masks only pad + vision tokens
    - Trains on: system + user + assistant messages
 
-3. collate_fn_fixed_fixed1 (class)
-   - Same as fixed_1 + optional Flash Attention monkey patch
-   - Use use_flash_patch=True to enable Flash Attention dtype fix
+3. FlashAttentionPatchCollator (class) [LEGACY]
+   - LEGACY: Same as AllTokensCollator + Flash Attention monkey patch
+   - Only needed if using flash_attention_2 (training uses sdpa now)
 
-4. collate_fn_fixed_3 (class)
+4. AssistantOnlyCollator (class)
    - Assistant-only collator: masks everything except assistant response
    - Trains on: only assistant response tokens (~30% of sequence)
 
@@ -183,7 +183,7 @@ def restore_images_in_conversations(messages_list, images_list):
 # COLLATOR V1: Basic - masks only pad + vision tokens
 # =============================================================================
 
-class collate_fn_fixed_1:
+class AllTokensCollator:
     """
     Basic collate function that masks pad and vision tokens.
 
@@ -259,9 +259,15 @@ class collate_fn_fixed_1:
 # COLLATOR V2: With optional Flash Attention patch
 # =============================================================================
 
-class collate_fn_fixed_fixed1:
+class FlashAttentionPatchCollator:
     """
-    Collator with optional Flash Attention dtype fix.
+    LEGACY: Collator with optional Flash Attention dtype fix.
+
+    ⚠️ WARNING: This collator is LEGACY and typically NOT needed!
+    Since training now uses sdpa (not flash_attention_2), the Flash Attention
+    patch is unnecessary. Use AllTokensCollator instead.
+
+    Kept for reference in case flash_attention_2 is used for inference.
 
     The Flash Attention cu_seqlens dtype error occurs because Flash Attention
     expects int32 tensors but they're created as int64. This collator can
@@ -373,7 +379,7 @@ class collate_fn_fixed_fixed1:
 # COLLATOR V3: Assistant-only training
 # =============================================================================
 
-class collate_fn_fixed_3:
+class AssistantOnlyCollator:
     """
     Collator that masks everything except assistant responses.
 
@@ -492,7 +498,7 @@ class collate_fn_fixed_3:
                 if len(trained_indices) > 0:
                     trained_tokens = batch_inputs["input_ids"][0][trained_indices]
                     decoded = self.processor.tokenizer.decode(trained_tokens, skip_special_tokens=False)
-                    print(f"[collate_fn_fixed_3] Sample {self.debug_count}: Training on {len(trained_indices)} tokens")
+                    print(f"[AssistantOnlyCollator] Sample {self.debug_count}: Training on {len(trained_indices)} tokens")
                     print(f"  Content: '{decoded}'")
                     print(f"  This is {100*len(trained_indices)/len(sample_labels):.1f}% of {len(sample_labels)} total tokens")
 
@@ -505,9 +511,9 @@ class collate_fn_fixed_3:
 # =============================================================================
 # These are experimental versions kept for reference and debugging.
 # The production collators are the three classes above:
-#   - collate_fn_fixed_1 (basic)
-#   - collate_fn_fixed_fixed1 (with Flash Attention patch option)
-#   - collate_fn_fixed_3 (assistant-only training)
+#   - AllTokensCollator (basic)
+#   - FlashAttentionPatchCollator (with Flash Attention patch option)
+#   - AssistantOnlyCollator (assistant-only training)
 #
 # NOTE: The draft collators below use global 'processor' and 'model' variables.
 # They need modification to use self.processor/self.model if converted to classes.
@@ -855,9 +861,9 @@ def debug_collate_fn(collate_fn, dataset, processor, model, num_samples=2):
     return batch_output
 
 
-def test_collate_fn_fixed_3(processor, model, train_dataset, train_dataset_formatted):
+def test_AssistantOnlyCollator(processor, model, train_dataset, train_dataset_formatted):
     """
-    Test collate_fn_fixed_3 and verify coordinate scaling.
+    Test AssistantOnlyCollator and verify coordinate scaling.
 
     Args:
         processor: Qwen2VLProcessor instance
@@ -869,10 +875,10 @@ def test_collate_fn_fixed_3(processor, model, train_dataset, train_dataset_forma
         collator: The created collator instance
     """
     print("\n" + "="*60)
-    print("TESTING collate_fn_fixed_3 & COORDINATE SCALING")
+    print("TESTING AssistantOnlyCollator & COORDINATE SCALING")
     print("="*60)
 
-    collator = collate_fn_fixed_3(processor, model)
+    collator = AssistantOnlyCollator(processor, model)
     collator.debug = True
 
     test_batch = [train_dataset_formatted[0]]
@@ -920,6 +926,14 @@ def test_collate_fn_fixed_3(processor, model, train_dataset, train_dataset_forma
     print("   1. Training on static prompts (70% of tokens) - poor learning signal")
     print("   2. Loss plateaued at ~3.25 - model not improving")
     print("   3. Need more epochs or higher learning rate")
-    print("   4. Should use collate_fn_fixed_3 for assistant-only training")
+    print("   4. Should use AssistantOnlyCollator for assistant-only training")
 
     return collator
+
+
+# =============================================================================
+# DEPRECATED ALIASES (for backwards compatibility)
+# =============================================================================
+collate_fn_fixed_1 = AllTokensCollator
+collate_fn_fixed_3 = AssistantOnlyCollator
+collate_fn_fixed_fixed1 = FlashAttentionPatchCollator

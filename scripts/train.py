@@ -36,8 +36,8 @@ import wandb
 # Import our extracted modules
 from src.models.loader import load_quantized_model  # Don't import prepare_for_kbit_training (legacy)
 from src.models.lora import create_lora_config  # Don't import apply_lora (legacy)
-from src.training.config import create_sft_config, print_training_config
-from src.data.collators import collate_fn_fixed_fixed1
+from src.training.config import create_training_config, print_training_config
+from src.data.collators import AllTokensCollator
 from src.data.dataset import convert_to_conversation_format, _has_image
 
 # =============================================================================
@@ -191,8 +191,8 @@ print("\n" + "="*60)
 print("STEP 6: Creating Data Collator")
 print("="*60)
 
-collate_fn = collate_fn_fixed_fixed1(processor, model, use_flash_patch=True)
-print("✅ Collator created with Flash Attention patch")
+collate_fn = AllTokensCollator(processor, model)
+print("✅ AllTokensCollator created (trains on all non-vision tokens)")
 
 # =============================================================================
 # STEP 7: Create Trainer and Train

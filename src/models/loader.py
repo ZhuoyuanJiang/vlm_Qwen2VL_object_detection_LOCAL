@@ -53,10 +53,16 @@ def load_quantized_model(
 
     Args:
         model_id: HuggingFace model ID (default: "Qwen/Qwen2-VL-7B-Instruct")
-        device_map: Device placement strategy:
-            - "balanced": Evenly distribute across available GPUs
-            - "auto": Let accelerate decide
-            - "sequential": Fill GPUs sequentially
+        device_map: Device placement strategy (all are MODEL PARALLELISM, not DataParallel):
+            - "balanced": Distribute layers evenly across GPUs (recommended)
+            - "auto": Smart placement - fills GPU0 first, can offload to CPU if needed
+            - "sequential": Simple fill - fills GPU0 then GPU1, more predictable
+            - "balanced_low_0": Balanced but keeps GPU0 lighter (for CPU offload)
+
+            IMPORTANT: This is model sharding, NOT data parallelism!
+            - Effective batch = per_device_batch_size × gradient_accumulation_steps
+            - NOT multiplied by num_gpus (that requires DDP/FSDP)
+
         use_flash_attention: Whether to use Flash Attention 2.
             - False (default): Uses "sdpa" - RECOMMENDED FOR TRAINING
             - True: Uses "flash_attention_2" - OK for inference only

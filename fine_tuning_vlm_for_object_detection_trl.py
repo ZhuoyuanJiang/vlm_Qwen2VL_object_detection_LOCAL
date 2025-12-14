@@ -168,9 +168,15 @@ if torch.cuda.is_available():
     print(f"\n✅ CONFIRMED: Using exactly {device_count} GPU(s) (max allowed: {MAX_GPUS})")
     
     if device_count > 1:
-        print("\n📝 Multi-GPU Training Notes:")
-        print("  - Model will automatically use DataParallel")
-        print("  - Effective batch size = per_device_batch_size × 2")
+        print("\n📝 Multi-GPU Training Notes (MODEL PARALLELISM):")
+        print("  - device_map='balanced' splits model layers evenly across GPUs")
+        print("  - This is NOT DataParallel - only ONE data stream, not parallel batches")
+        print("  - Effective batch = per_device_batch_size × gradient_accumulation_steps")
+        print("  - (To multiply by num_gpus, you'd need DDP/FSDP for data parallelism)")
+        print("  ")
+        print("  device_map options:")
+        print("    'auto'     - fills GPU0 first, spills to GPU1")
+        print("    'balanced' - distributes layers evenly across GPUs (recommended)")
 else:
     print("❌ CUDA not available! Exiting...")
     sys.exit(1)
@@ -1369,13 +1375,21 @@ bnb_config = BitsAndBytesConfig(
 model_id = "Qwen/Qwen2-VL-7B-Instruct"
 
 # Load the model with 4-bit quantization
-# Use "balanced" to evenly distribute model across available GPUs
+# =============================================================================
+# device_map OPTIONS (both are MODEL PARALLELISM, not DataParallel):
+#   "auto"     - fills GPU0 first, spills to GPU1
+#   "balanced" - distributes layers evenly across GPUs (recommended)
+#
+# IMPORTANT: This is model sharding, NOT data parallelism!
+# - Effective batch = per_device_batch_size × gradient_accumulation_steps
+# - NOT multiplied by num_gpus (that requires DDP/FSDP)
+# =============================================================================
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     model_id,
     quantization_config=bnb_config,
-    device_map="balanced",  # Changed from "auto" to evenly distribute across GPUs
+    device_map="balanced",  # Model parallelism: distributes layers evenly across GPUs
     torch_dtype=torch.bfloat16,
-    attn_implementation="sdpa",  # Use Flash Attention 2 for efficiency
+    attn_implementation="sdpa",  # Use SDPA for training (flash_attention_2 for inference)
     trust_remote_code=True,
 )
 
@@ -1534,61 +1548,104 @@ print("   Note: We pass peft_config to SFTTrainer instead of manually calling ge
 from trl import SFTConfig
 # TASK: create an SFT config
 
-training_args = SFTConfig(
-    # Output and logging - SAVE TO SSD TO AVOID HOME DIRECTORY QUOTA
-    output_dir="/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora",
-    logging_dir="/ssd1/zhuoyuan/vlm_outputs/logs",
-    logging_steps=10,  # Show training loss every 10 steps for frequent updates
-    
-    # Training hyperparameters
-    num_train_epochs=3,
-    per_device_train_batch_size=1,  # Adjust based on GPU memory
-    per_device_eval_batch_size=1,
-    gradient_accumulation_steps=8,  # Back to 8 for larger effective batch size (2 * 1 * 8 = 16)
-    gradient_checkpointing=False,  # Disabled - causes issues with QLoRA
-    # gradient_checkpointing_kwargs={"use_reentrant": False},  # Not needed when disabled
-    
-    # Learning rate and optimization
-    learning_rate=2e-5,  # Slightly higher for better convergence with vision models
-    warmup_steps=100,
-    lr_scheduler_type="cosine",
-    optim="adamw_torch",
-    adam_beta2=0.999,
-    weight_decay=0.01,
-    max_grad_norm=1.0,
-    
-    # Mixed precision and performance
-    bf16=True,  # Use bfloat16 precision
-    tf32=True,  # Enable TF32 on Ampere GPUs
-    dataloader_num_workers=0,
-    # dataloader_num_workers=2,  # Use 2 workers for better data loading
-    # dataloader_pin_memory=True,  # Pin memory for faster GPU transfer
-    
-    # Evaluation and saving
-    eval_strategy="steps",
+
+def create_training_config(
+    # === VARIANT NAME (used for output dir and W&B run name) ===
+    variant: str,  # e.g., "v1-all-tokens", "v2-assistant-only", "v3-encoder-only"
+
+    # === HYPERPARAMETERS (with sensible defaults) ===
+    num_train_epochs: int = 3,
+    per_device_train_batch_size: int = 1,
+    per_device_eval_batch_size: int = 1,
+    gradient_accumulation_steps: int = 8,
+    learning_rate: float = 2e-5,
+    warmup_steps: int = 100,
+
+    # === EVAL/SAVE FREQUENCY ===
+    eval_steps: int = 50,
+    save_steps: int = 300,
+
+    # === SEQUENCE SETTINGS ===
+    max_length: int = 2048,
+
+    # === ADVANCED (rarely changed) ===
+    lr_scheduler_type: str = "cosine",
+    weight_decay: float = 0.01,
+    max_grad_norm: float = 1.0,
+    seed: int = 42,
+) -> SFTConfig:
+    """
+    Create SFT training configuration for any training variant.
+
+    Args:
+        variant: Name like "v1-all-tokens", "v2-assistant-only", etc.
+                 Used for output_dir suffix and W&B run_name.
+
+    Supports: v1 (all tokens), v2 (assistant-only), v3 (encoder-only), v4 (LLM-only)
+    """
+    # SAVE TO SSD TO AVOID HOME DIRECTORY QUOTA
+    base_output_dir = "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection"
+    base_logging_dir = "/ssd1/zhuoyuan/vlm_outputs/logs"
+
+    return SFTConfig(
+        # Output and logging - use variant name for paths
+        output_dir=f"{base_output_dir}-{variant}",
+        logging_dir=f"{base_logging_dir}-{variant}",
+        logging_steps=10,  # Show training loss every 10 steps for frequent updates
+
+        # Training hyperparameters
+        num_train_epochs=num_train_epochs,
+        per_device_train_batch_size=per_device_train_batch_size,  # Adjust based on GPU memory
+        per_device_eval_batch_size=per_device_eval_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,  # Effective batch size = per_device * accumulation
+        gradient_checkpointing=False,  # DISABLED - causes issues with QLoRA
+
+        # Learning rate and optimization
+        learning_rate=learning_rate,  # 2e-5 is slightly higher for better convergence with vision models
+        warmup_steps=warmup_steps,
+        lr_scheduler_type=lr_scheduler_type,
+        optim="adamw_torch",
+        adam_beta2=0.999,
+        weight_decay=weight_decay,
+        max_grad_norm=max_grad_norm,
+
+        # Mixed precision and performance
+        bf16=True,  # Use bfloat16 precision
+        tf32=True,  # Enable TF32 on Ampere GPUs
+        dataloader_num_workers=0,
+
+        # Evaluation and saving
+        eval_strategy="steps",
+        eval_steps=eval_steps,
+        save_strategy="steps",
+        save_steps=save_steps,
+        save_total_limit=3,  # Only keep last 3 checkpoints
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+
+        # Other settings
+        remove_unused_columns=False,
+        push_to_hub=False,
+        report_to="wandb",  # Use W&B for logging metrics
+        run_name=f"qwen2vl-{variant}",
+        seed=seed,  # For reproducibility
+
+        # TRL specific - CONSISTENT for all variants
+        # Note: dataset_text_field would be "messages" if we wanted SFTTrainer to handle text extraction,
+        # but we handle everything in our custom collate_fn, so we leave it empty.
+        dataset_text_field="",
+        max_length=max_length,
+        dataset_kwargs={
+            "skip_prepare_dataset": True  # We handle data preparation ourselves
+        },
+    )
+
+
+training_args = create_training_config(
+    variant="v1-all-tokens",
     eval_steps=50,
-    save_strategy="steps",
-    save_steps=300,  # Changed from 100 to 300 - fewer checkpoints
-    save_total_limit=3,  # Only keep last 3 checkpoints
-    load_best_model_at_end=True,
-    metric_for_best_model="eval_loss",
-    greater_is_better=False,
-    
-    # Other settings
-    remove_unused_columns=False,
-    push_to_hub=False,
-    report_to="wandb",  # Use W&B for logging metrics (changed from tensorboard)
-    run_name="qwen2vl-nutrition-detection",
-    seed=42,  # For reproducibility
-    
-    # Specific for vision models
-    dataset_text_field="",  # Empty string because we use custom data_collator, not "messages"
-    # Note: dataset_text_field would be "messages" if we wanted SFTTrainer to handle text extraction,
-    # but we handle everything in our custom collate_fn, so we leave it empty
-    max_length=2048,
-    dataset_kwargs={
-        "skip_prepare_dataset": True  # We handle data preparation ourselves
-    },
+    save_steps=300,
 )
 
 print("Training Configuration:")
@@ -1686,7 +1743,7 @@ import torch
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from qwen_vl_utils import process_vision_info
 # Fixed collate_fn with improved error handling and robust masking  
-class collate_fn_fixed_1:
+class AllTokensCollator:
     """
     FIXED VERSION: Robust collate function that prevents out-of-range label issues.
     
@@ -1832,176 +1889,11 @@ class collate_fn_fixed_1:
 
         return batch_inputs
 
-print("✅ Fixed collate_fn_1 created")
-
-# %%
-# Fixed collate_fn with Flash Attention dtype fix for cu_seqlens
-class collate_fn_fixed_fixed1:
-    """
-    FIXED VERSION 2: Fixes Flash Attention cu_seqlens_q dtype error.
-    
-    The error "RuntimeError: cu_seqlens_q must have dtype int32" occurs because
-    Flash Attention expects cumulative sequence length tensors to be int32,
-    but they're created as int64 internally.
-    
-    This collator patches the Flash Attention forward pass to ensure cu_seqlens
-    tensors have the correct dtype.
-    """
-    
-    def __init__(self, processor, model):
-        self.processor = processor
-        self.model = model
-        self.masked_token_ids = [
-            self.processor.tokenizer.pad_token_id,
-            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
-            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
-            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
-        ]
-        self.call_count = 0  # Track calls to limit debug output
-        
-        # Apply monkey patch to fix cu_seqlens dtype issue
-        self._patch_flash_attention()
-    
-    def _patch_flash_attention(self):
-        """Monkey-patch Flash Attention to fix cu_seqlens dtype."""
-        import flash_attn.flash_attn_interface as flash_interface
-        
-        # Store original _flash_attn_varlen_forward function
-        original_flash_varlen_forward = flash_interface._flash_attn_varlen_forward
-        
-        def patched_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k, 
-                                        max_seqlen_q, max_seqlen_k, *args, **kwargs):
-            # Convert cu_seqlens to int32 if needed
-            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
-                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
-            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
-                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
-            
-            # Call original function with fixed dtypes
-            return original_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
-                                                max_seqlen_q, max_seqlen_k, *args, **kwargs)
-        
-        # Replace the internal _flash_attn_varlen_forward function
-        flash_interface._flash_attn_varlen_forward = patched_flash_varlen_forward
-        
-        # Also patch the FlashAttnVarlenFunc.forward method
-        from flash_attn.flash_attn_interface import FlashAttnVarlenFunc
-        original_forward = FlashAttnVarlenFunc.forward
-        
-        @staticmethod
-        def patched_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k, 
-                          max_seqlen_q, max_seqlen_k, *args):
-            # Convert cu_seqlens to int32 if needed
-            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
-                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
-            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
-                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
-            
-            # Call original forward with fixed dtypes
-            return original_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
-                                   max_seqlen_q, max_seqlen_k, *args)
-        
-        FlashAttnVarlenFunc.forward = patched_forward
-        print("✅ Applied Flash Attention cu_seqlens dtype patch (both _flash_attn_varlen_forward and FlashAttnVarlenFunc.forward)")
-    
-    def __call__(self, batch):
-        # Extract messages and images from each sample
-        messages_list = [sample['messages'] for sample in batch]
-        images_list = [sample.get('image', None) for sample in batch]
-        
-        # Filter out samples without images
-        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-        if not valid_pairs:
-            raise ValueError("Batch contains no valid images.")
-        
-        messages_list, images_list = zip(*valid_pairs)
-        messages_list = list(messages_list)
-        images_list = list(images_list)
-        
-        all_conversations = []
-        
-        for messages, image in zip(messages_list, images_list):
-            messages_with_image = []
-            for msg in messages:
-                msg_copy = {'role': msg['role'], 'content': []}
-                
-                for content_item in msg['content']:
-                    if content_item is None:
-                        continue
-                    
-                    if content_item.get('type') == 'text':
-                        text_value = content_item.get('text')
-                        if text_value is not None and text_value != 'None':
-                            msg_copy['content'].append({
-                                'type': 'text',
-                                'text': text_value
-                            })
-                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                        image_value = content_item.get('image')
-                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                            msg_copy['content'].append({
-                                'type': 'image',
-                                'image': image
-                            })
-                        elif image_value and image_value != 'None':
-                            msg_copy['content'].append({
-                                'type': 'image',
-                                'image': image_value
-                            })
-                
-                if msg_copy['content']:
-                    messages_with_image.append(msg_copy)
-            
-            all_conversations.append(messages_with_image)
-        
-        # Apply chat template
-        text = self.processor.apply_chat_template(
-            all_conversations,
-            tokenize=False,
-            add_generation_prompt=False
-        )
-        
-        # Process vision info
-        image, video = process_vision_info(all_conversations)
-        
-        # Process texts and images together
-        batch_inputs = self.processor(
-            text=text,
-            images=image,
-            padding=True,
-            truncation=False,
-            return_tensors="pt"
-        )
-        
-        # Ensure correct dtypes for all tensors
-        if 'input_ids' in batch_inputs:
-            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
-        
-        if 'attention_mask' in batch_inputs:
-            batch_inputs['attention_mask'] = batch_inputs['attention_mask'].to(torch.long)
-        
-        # Create labels with masking
-        labels = batch_inputs["input_ids"].clone()
-        for token_id in self.masked_token_ids:
-            labels[labels == token_id] = -100
-        batch_inputs["labels"] = labels
-        
-        # Debug output disabled for clean training logs
-        # Uncomment the lines below if you need to debug token masking:
-        # self.call_count += 1
-        # if self.call_count <= 3:  # Only show first 3 samples
-        #     non_masked = (labels != -100).sum().item()
-        #     total = labels.numel()
-        #     if non_masked > 0 and total > 0:
-        #         print(f"[Sample {self.call_count}] Training on {non_masked}/{total} tokens ({100*non_masked/total:.1f}%)")
-        
-        return batch_inputs
-
-print("✅ Fixed collate_fn_fixed_fixed1 created with Flash Attention dtype patch")
+print("✅ AllTokensCollator created")
 
 # %%
 # Use the already loaded model and processor from above
-collate_fn = collate_fn_fixed_1(processor, model)
+collate_fn = AllTokensCollator(processor, model)
 
 # %%
 # Function to analyze token distribution
@@ -2246,7 +2138,7 @@ base_model_id = "Qwen/Qwen2-VL-7B-Instruct"
 model_finetuned = Qwen2VLForConditionalGeneration.from_pretrained(
     base_model_id,
     torch_dtype=torch.bfloat16,
-    device_map="balanced",  # Use balanced for multi-GPU consistency
+    device_map="balanced",  # Model parallelism (not DataParallel)
     attn_implementation="flash_attention_2",
 )
 
@@ -2354,22 +2246,22 @@ x_max = x_max * width
 y_max = y_max * height
 draw_gt.rectangle([x_min, y_min, x_max, y_max], outline='green', width=3)
 
-axes[0].imshow(img_gt)
-axes[0].set_title(f"Ground Truth: {ground_truth_category}")
-axes[0].axis('off')
+_ = axes[0].imshow(img_gt)
+_ = axes[0].set_title(f"Ground Truth: {ground_truth_category}")
+_ = axes[0].axis('off')
 
 # Model prediction
 if parsed_bbox:
     img_pred = visualize_bbox_on_image(image, parsed_bbox, normalize_coords=True)
-    axes[1].imshow(img_pred)
-    axes[1].set_title(f"Model Prediction: {parsed_bbox['object']}")
+    _ = axes[1].imshow(img_pred)
+    _ = axes[1].set_title(f"Model Prediction: {parsed_bbox['object']}")
 else:
-    axes[1].imshow(image)
-    axes[1].set_title("Model Prediction: No detection")
-axes[1].axis('off')
+    _ = axes[1].imshow(image)
+    _ = axes[1].set_title("Model Prediction: No detection")
+_ = axes[1].axis('off')
 
-plt.tight_layout()
-plt.show()
+_ = plt.tight_layout()
+_ = plt.show()
 
 # %% [markdown] id="swibyq5AWctZ"
 # Since this sample is drawn from the training set, the model has encountered it during training, which may be seen as a form of cheating. To gain a more comprehensive understanding of the model's performance, you should also evaluate it using the eval dataset. For this, write an evaluation script that measures the IoU metric between the ground truth box and the predicted boundig box.
@@ -2519,16 +2411,16 @@ print(f"  IoU > 0.5: {metrics_finetuned['iou_threshold_0.5']:.2%}")
 print(f"  IoU > 0.7: {metrics_finetuned['iou_threshold_0.7']:.2%}")
 
 # Plot IoU distribution
-plt.figure(figsize=(10, 6))
-plt.hist(ious_finetuned, bins=20, edgecolor='black', alpha=0.7)
-plt.xlabel('IoU Score')
-plt.ylabel('Number of Samples')
-plt.title('Distribution of IoU Scores - Fine-tuned Model')
-plt.axvline(metrics_finetuned['mean_iou'], color='red', linestyle='--', label=f"Mean IoU: {metrics_finetuned['mean_iou']:.3f}")
-plt.axvline(0.5, color='green', linestyle='--', alpha=0.5, label='IoU = 0.5')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
+_ = plt.figure(figsize=(10, 6))
+_ = plt.hist(ious_finetuned, bins=20, edgecolor='black', alpha=0.7)
+_ = plt.xlabel('IoU Score')
+_ = plt.ylabel('Number of Samples')
+_ = plt.title('Distribution of IoU Scores - Fine-tuned Model')
+_ = plt.axvline(metrics_finetuned['mean_iou'], color='red', linestyle='--', label=f"Mean IoU: {metrics_finetuned['mean_iou']:.3f}")
+_ = plt.axvline(0.5, color='green', linestyle='--', alpha=0.5, label='IoU = 0.5')
+_ = plt.legend()
+_ = plt.grid(True, alpha=0.3)
+_ = plt.show()
 
 # %% [markdown] id="ATuQ6ZS6eirO" outputId="c3adc0fd-0fdc-4ff4-cc4e-14b4d9039323"
 # Do the same evaluation for the model without finetuning.
@@ -2539,7 +2431,7 @@ print("\nLoading base model for comparison...")
 base_model = Qwen2VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2-VL-7B-Instruct",
     torch_dtype=torch.bfloat16,
-    device_map="balanced",  # Use balanced for multi-GPU consistency
+    device_map="balanced",  # Model parallelism (not DataParallel)
     attn_implementation="flash_attention_2",
 )
 base_processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
@@ -2670,8 +2562,8 @@ print("This model can now be loaded without PEFT and used for efficient inferenc
 # =============================================================================
 
 # %%
-# Clean collate_fn_fixed_3 class that only trains on assistant responses
-class collate_fn_fixed_3:
+# Clean AssistantOnlyCollator class that only trains on assistant responses
+class AssistantOnlyCollator:
     """
     Clean collator that masks everything except assistant responses.
     This ensures the model only learns the actual detection task (bbox coordinates)
@@ -2827,36 +2719,36 @@ class collate_fn_fixed_3:
                 if len(trained_indices) > 0:
                     trained_tokens = batch_inputs["input_ids"][0][trained_indices]
                     decoded = self.processor.tokenizer.decode(trained_tokens, skip_special_tokens=False)
-                    print(f"[collate_fn_fixed_3] Sample {self.debug_count}: Training on {len(trained_indices)} tokens")
+                    print(f"[AssistantOnlyCollator] Sample {self.debug_count}: Training on {len(trained_indices)} tokens")
                     print(f"  Content: '{decoded}'")
                     print(f"  This is {100*len(trained_indices)/len(sample_labels):.1f}% of {len(sample_labels)} total tokens")
         
         batch_inputs["labels"] = labels
         return batch_inputs
 
-print("✅ Created collate_fn_fixed_3 - clean assistant-only training")
+print("✅ Created AssistantOnlyCollator - clean assistant-only training")
 
 # =============================================================================
-# DELETED FOR CLEANNESS: test_collate_fn_fixed_3
+# DELETED FOR CLEANNESS: test_AssistantOnlyCollator
 #
 # For reference:
-#   - Import: from src.data.collators import test_collate_fn_fixed_3
+#   - Import: from src.data.collators import test_AssistantOnlyCollator
 #   - Or copy from: src/data/collators.py (under "BACKUP/DRAFT COLLATORS" section)
 #
 # Original structure:
-#   def test_collate_fn_fixed_3():  # ~65 lines - test function for coordinate scaling verification
+#   def test_AssistantOnlyCollator():  # ~65 lines - test function for coordinate scaling verification
 #
 # Example usage (after importing):
-#   # from src.data.collators import test_collate_fn_fixed_3
-#   # test_collator = test_collate_fn_fixed_3()
+#   # from src.data.collators import test_AssistantOnlyCollator
+#   # test_collator = test_AssistantOnlyCollator()
 # =============================================================================
 
 # %%
 # ================================================================================
-# SECOND TRAINING RUN: Using collate_fn_fixed_3 (Assistant-Only Training)
+# SECOND TRAINING RUN: Using AssistantOnlyCollator (Assistant-Only Training)
 # ================================================================================
 print("\n" + "="*80)
-print("SECOND TRAINING RUN: ASSISTANT-ONLY WITH collate_fn_fixed_3")
+print("SECOND TRAINING RUN: ASSISTANT-ONLY WITH AssistantOnlyCollator")
 print("="*80)
 print("""
 This training run focuses ONLY on assistant responses (bbox coordinates),
@@ -2867,73 +2759,65 @@ ignoring system prompts and user messages. This should lead to:
 """)
 
 # %%
-# Clear GPU memory before starting second training
+# =============================================================================
+# IMPORTANT: Reload fresh model for second training run
+# =============================================================================
+# The first trainer wraps `model` with LoRA adapters internally.
+# Reusing the same model object for a second trainer can cause issues:
+# - Double-wrapping with LoRA adapters
+# - Unexpected weight sharing
+# - Potential "0 trainable params" bugs
+#
+# Solution: Delete first trainer and reload a fresh model.
+# =============================================================================
 import torch
 import gc
 
-print("\n🧹 Clearing GPU memory before second training...")
-torch.cuda.empty_cache()
+print("\n🧹 Cleaning up first trainer and reloading fresh model...")
+
+# Delete first trainer and model to free GPU memory
+print("   Deleting trainer and model...")
+del trainer
+del model
 gc.collect()
+torch.cuda.empty_cache()
 torch.cuda.synchronize()
-print(f"GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
-print(f"GPU reserved memory: {torch.cuda.memory_reserved() / 1024**3:.2f} GB")
+print(f"   GPU allocated memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+
+# Reload fresh model for second training run
+print("\n🔄 Reloading fresh quantized model...")
+from transformers import Qwen2VLForConditionalGeneration, BitsAndBytesConfig
+
+bnb_config_v2 = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct",
+    quantization_config=bnb_config_v2,
+    device_map="balanced",  # Model parallelism (not DataParallel)
+    torch_dtype=torch.bfloat16,
+    attn_implementation="sdpa",
+    trust_remote_code=True,
+)
+
+print(f"✅ Fresh model loaded")
+print(f"   GPU allocated memory: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
 # %%
 # Create new training configuration for assistant-only training
-from trl import SFTConfig
+# (Reusing create_training_config() function defined earlier)
 
-training_args_v3 = SFTConfig(
-    # Output and logging - Different directory for comparison
-    output_dir="/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora-assistantonly",
-    logging_dir="/ssd1/zhuoyuan/vlm_outputs/logs-assistantonly",
-    logging_steps=10,  # Show training loss every 10 steps
-    
-    # Training hyperparameters (same as original for fair comparison)
-    num_train_epochs=3,
-    per_device_train_batch_size=1,
-    per_device_eval_batch_size=1,
-    gradient_accumulation_steps=8,  # Effective batch size = 16
-    gradient_checkpointing=False,  # Disabled - causes issues with QLoRA
-    
-    # Learning rate and optimization (same as original)
-    learning_rate=2e-5,
-    warmup_steps=100,
-    lr_scheduler_type="cosine",
-    optim="adamw_torch",
-    adam_beta2=0.999,
-    weight_decay=0.01,
-    max_grad_norm=1.0,
-    
-    # Mixed precision and performance
-    bf16=True,
-    tf32=True,
-    dataloader_num_workers=0,
-    
-    # Evaluation and saving
-    eval_strategy="steps",
-    eval_steps=100,
-    save_strategy="steps",
-    save_steps=100,
-    save_total_limit=3,
-    load_best_model_at_end=True,
-    metric_for_best_model="eval_loss",
-    greater_is_better=False,
-    
-    # Advanced options
-    remove_unused_columns=False,
-    label_names=["labels"],
-    
-    # Debugging / reporting
-    report_to="wandb",  # Use W&B for consistency with first trainer
-    run_name="qwen2vl-7b-assistant-only",  # Distinct run name for clear separation on W&B
-    
-    # TRL specific
-    dataset_text_field=None,  # We handle formatting in collate_fn
-    packing=False,
+training_args_v2 = create_training_config(
+    variant="v2-assistant-only",
+    # Same eval/save steps as v1 for fair comparison
 )
 
 print("✅ Created new SFTConfig for assistant-only training")
-print(f"   Output directory: {training_args_v3.output_dir}")
+print(f"   Output directory: {training_args_v2.output_dir}")
 
 # Create a separate W&B run for assistant-only stage
 try:
@@ -2942,30 +2826,29 @@ try:
     _wandb.init(
         project="qwen2vl-nutrition-detection",
         name="qwen2vl-7b-assistant-only",
-        tags=["stage:assistant-only", "collator:v3", "qlora", "lora"],
+        tags=["stage:assistant-only", "collator:v2", "qlora", "lora"],
     )
 except Exception as _e:
     print(f"[warn] W&B re-init failed: {_e}")
 
 # %%
-# Initialize collate_fn_fixed_3
-print("\n📦 Initializing collate_fn_fixed_3...")
+# Initialize AssistantOnlyCollator
+print("\n📦 Initializing AssistantOnlyCollator...")
 
-# Create instance of collate_fn_fixed_3
-# Note: processor and model should be available from earlier training
-collate_fn_v3 = collate_fn_fixed_3(processor, model)
-collate_fn_v3.debug = True  # Enable debug output for first few samples
-collate_fn_v3.max_debug = 5  # Show first 5 samples for verification
+# Create instance of AssistantOnlyCollator with fresh model
+collate_fn_v2 = AssistantOnlyCollator(processor, model)
+collate_fn_v2.debug = True  # Enable debug output for first few samples
+collate_fn_v2.max_debug = 5  # Show first 5 samples for verification
 
-print("✅ collate_fn_fixed_3 initialized")
+print("✅ AssistantOnlyCollator initialized")
 print("   - Will train ONLY on assistant responses")
 print("   - Debug output enabled for first 5 samples")
 
 # %%
 # Test the collator with a sample batch
-print("\n🧪 Testing collate_fn_fixed_3 with a sample batch...")
+print("\n🧪 Testing AssistantOnlyCollator with a sample batch...")
 test_batch = [train_dataset_formatted[0], train_dataset_formatted[1]]
-test_output = collate_fn_v3(test_batch)
+test_output = collate_fn_v2(test_batch)
 
 # Analyze what we're training on
 labels = test_output['labels']
@@ -2978,9 +2861,9 @@ print(f"   - Tokens masked (ignored): {total - non_masked} ({100*(total-non_mask
 
 # Additional token distribution audits for assistant-only collator
 print("\n📊 Token distribution (assistant-only) on train split...")
-analyze_token_distribution(collate_fn_v3, train_dataset_formatted, num_samples=3)
+analyze_token_distribution(collate_fn_v2, train_dataset_formatted, num_samples=3)
 print("\n📊 Token distribution (assistant-only) on validation split...")
-analyze_token_distribution(collate_fn_v3, eval_dataset_formatted, num_samples=3)
+analyze_token_distribution(collate_fn_v2, eval_dataset_formatted, num_samples=3)
 
 # %%
 # Create the second SFTTrainer
@@ -2990,12 +2873,12 @@ print("\n🎯 Creating second SFTTrainer with assistant-only training...")
 
 # BUG FIX (2025-11-25): Same fix as first trainer - pass peft_config instead of
 # assuming model already has LoRA adapters. This prevents the double-preparation bug.
-trainer_v3 = SFTTrainer(
+trainer_v2 = SFTTrainer(
     model=model,  # Base model - SFTTrainer will handle LoRA setup
-    args=training_args_v3,
+    args=training_args_v2,
     train_dataset=train_dataset_formatted,
     eval_dataset=eval_dataset_formatted,
-    data_collator=collate_fn_v3,  # Using collate_fn_fixed_3 for assistant-only
+    data_collator=collate_fn_v2,  # Using AssistantOnlyCollator for assistant-only
     processing_class=processor,
     peft_config=lora_config,  # BUG FIX: Let SFTTrainer handle LoRA setup properly
 )
@@ -3003,19 +2886,19 @@ trainer_v3 = SFTTrainer(
 print("✅ Second SFTTrainer created successfully")
 print(f"   Total training samples: {len(train_dataset_formatted)}")
 print(f"   Total evaluation samples: {len(eval_dataset_formatted)}")
-print(f"   Training with assistant-only collator (collate_fn_fixed_3)")
+print(f"   Training with assistant-only collator (AssistantOnlyCollator)")
 
 # Calculate training steps
-steps_per_epoch = len(train_dataset_formatted) // (training_args_v3.per_device_train_batch_size * training_args_v3.gradient_accumulation_steps)
-total_steps = steps_per_epoch * training_args_v3.num_train_epochs
+steps_per_epoch = len(train_dataset_formatted) // (training_args_v2.per_device_train_batch_size * training_args_v2.gradient_accumulation_steps)
+total_steps = steps_per_epoch * training_args_v2.num_train_epochs
 print(f"   Steps per epoch: {steps_per_epoch}")
 print(f"   Total training steps: {total_steps}")
 
 # DEBUG: Check if LoRA parameters are trainable after SFTTrainer creation
 print("\n" + "="*60)
-print("CHECKING TRAINABLE PARAMETERS AFTER trainer_v3 CREATION")
+print("CHECKING TRAINABLE PARAMETERS AFTER trainer_v2 CREATION")
 print("="*60)
-trainer_v3.model.print_trainable_parameters()
+trainer_v2.model.print_trainable_parameters()
 # If this shows 0 trainable params, the bug is still present
 
 # =============================================================================
@@ -3024,13 +2907,13 @@ trainer_v3.model.print_trainable_parameters()
 # To re-enable:
 #   from src.training.callbacks import GradNormCallback, IoUEvalCallback, ConsoleLogCallback
 #
-# _iou_cb_v3 = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
-# _iou_cb_v3.trainer = trainer_v3
-# trainer_v3.add_callback(_iou_cb_v3)
-# _grad_cb_v3 = GradNormCallback()
-# _grad_cb_v3.trainer = trainer_v3
-# trainer_v3.add_callback(_grad_cb_v3)
-# trainer_v3.add_callback(ConsoleLogCallback())
+# _iou_cb_v2 = IoUEvalCallback(processor=processor, eval_dataset=eval_dataset, num_samples=24, prefix="eval")
+# _iou_cb_v2.trainer = trainer_v2
+# trainer_v2.add_callback(_iou_cb_v2)
+# _grad_cb_v2 = GradNormCallback()
+# _grad_cb_v2.trainer = trainer_v2
+# trainer_v2.add_callback(_grad_cb_v2)
+# trainer_v2.add_callback(ConsoleLogCallback())
 # =============================================================================
 
 # %%
@@ -3043,48 +2926,212 @@ print("Watch for lower loss values compared to the first training run!")
 print("")
 
 # Train the model
-trainer_v3.train()
+trainer_v2.train()
 
 # %%
 # Save the fine-tuned model
 print("\n💾 Saving the assistant-only fine-tuned model...")
-trainer_v3.save_model(training_args_v3.output_dir)
-processor.save_pretrained(training_args_v3.output_dir)
+trainer_v2.save_model(training_args_v2.output_dir)
+processor.save_pretrained(training_args_v2.output_dir)
 
-print(f"✅ Model saved to: {training_args_v3.output_dir}")
+print(f"✅ Model saved to: {training_args_v2.output_dir}")
 print("\n" + "="*80)
 print("TRAINING COMPLETE!")
 print("="*80)
 print("\nYou now have two trained models:")
 print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
-print(f"2. Assistant-only: {training_args_v3.output_dir}")
+print(f"2. Assistant-only: {training_args_v2.output_dir}")
 print("\nCompare their performance to see which approach works better!")
 
 # %%
-# Load and evaluate v3 model
-model_finetuned_v3 = Qwen2VLForConditionalGeneration.from_pretrained(
+# Load and evaluate v2 model
+model_finetuned_v2 = Qwen2VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2-VL-7B-Instruct",
     torch_dtype=torch.bfloat16,
-    device_map="balanced",
+    device_map="balanced",  # Model parallelism (not DataParallel)
     attn_implementation="flash_attention_2",
 )
-model_finetuned_v3 = PeftModel.from_pretrained(
-    model_finetuned_v3,
-    training_args_v3.output_dir,
+model_finetuned_v2 = PeftModel.from_pretrained(
+    model_finetuned_v2,
+    training_args_v2.output_dir,
     torch_dtype=torch.bfloat16,
 )
-processor_finetuned_v3 = Qwen2VLProcessor.from_pretrained(training_args_v3.output_dir)
+processor_finetuned_v2 = Qwen2VLProcessor.from_pretrained(training_args_v2.output_dir)
 
-metrics_v3, ious_v3 = evaluate_model(
-    model_finetuned_v3,
-    processor_finetuned_v3,
+metrics_v2, ious_v2 = evaluate_model(
+    model_finetuned_v2,
+    processor_finetuned_v2,
     eval_dataset,
     num_samples=50
 )
 
-print("\nModel v3 IoU Statistics:")
-print(f"  Mean IoU: {metrics_v3['mean_iou']:.4f}")
-print(f"  Median IoU: {metrics_v3['median_iou']:.4f}")
-print(f"  Detection Rate: {metrics_v3['detection_rate']:.2%}")
-print(f"  IoU > 0.5: {metrics_v3['iou_threshold_0.5']:.2%}")
-print(f"  IoU > 0.7: {metrics_v3['iou_threshold_0.7']:.2%}")
+print("\nModel v2 IoU Statistics:")
+print(f"  Mean IoU: {metrics_v2['mean_iou']:.4f}")
+print(f"  Median IoU: {metrics_v2['median_iou']:.4f}")
+print(f"  Detection Rate: {metrics_v2['detection_rate']:.2%}")
+print(f"  IoU > 0.5: {metrics_v2['iou_threshold_0.5']:.2%}")
+print(f"  IoU > 0.7: {metrics_v2['iou_threshold_0.7']:.2%}")
+
+
+# =============================================================================
+# DRAFT / LEGACY COLLATORS
+# =============================================================================
+# The following collators are kept for reference but are NOT used in training.
+# =============================================================================
+
+class FlashAttentionPatchCollator:
+    """
+    LEGACY: Flash Attention dtype workaround.
+
+    This was a workaround for Flash Attention 2 requiring bfloat16 pixel values.
+    Since training now uses sdpa (not flash_attention_2), this is NOT needed.
+
+    Kept for reference in case flash_attention_2 is used for inference.
+
+    The error "RuntimeError: cu_seqlens_q must have dtype int32" occurs because
+    Flash Attention expects cumulative sequence length tensors to be int32,
+    but they're created as int64 internally.
+
+    This collator patches the Flash Attention forward pass to ensure cu_seqlens
+    tensors have the correct dtype.
+    """
+
+    def __init__(self, processor, model):
+        self.processor = processor
+        self.model = model
+        self.masked_token_ids = [
+            self.processor.tokenizer.pad_token_id,
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
+            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+        ]
+        self.call_count = 0  # Track calls to limit debug output
+
+        # Apply monkey patch to fix cu_seqlens dtype issue
+        self._patch_flash_attention()
+
+    def _patch_flash_attention(self):
+        """Monkey-patch Flash Attention to fix cu_seqlens dtype."""
+        import flash_attn.flash_attn_interface as flash_interface
+
+        # Store original _flash_attn_varlen_forward function
+        original_flash_varlen_forward = flash_interface._flash_attn_varlen_forward
+
+        def patched_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                        max_seqlen_q, max_seqlen_k, *args, **kwargs):
+            # Convert cu_seqlens to int32 if needed
+            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+
+            # Call original function with fixed dtypes
+            return original_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                                max_seqlen_q, max_seqlen_k, *args, **kwargs)
+
+        # Replace the internal _flash_attn_varlen_forward function
+        flash_interface._flash_attn_varlen_forward = patched_flash_varlen_forward
+
+        # Also patch the FlashAttnVarlenFunc.forward method
+        from flash_attn.flash_attn_interface import FlashAttnVarlenFunc
+        original_forward = FlashAttnVarlenFunc.forward
+
+        @staticmethod
+        def patched_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
+                          max_seqlen_q, max_seqlen_k, *args):
+            # Convert cu_seqlens to int32 if needed
+            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+
+            # Call original forward with fixed dtypes
+            return original_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                   max_seqlen_q, max_seqlen_k, *args)
+
+        FlashAttnVarlenFunc.forward = patched_forward
+        print("✅ Applied Flash Attention cu_seqlens dtype patch (both _flash_attn_varlen_forward and FlashAttnVarlenFunc.forward)")
+
+    def __call__(self, batch):
+        # Extract messages and images from each sample
+        messages_list = [sample['messages'] for sample in batch]
+        images_list = [sample.get('image', None) for sample in batch]
+
+        # Filter out samples without images
+        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+        if not valid_pairs:
+            raise ValueError("Batch contains no valid images.")
+
+        messages_list, images_list = zip(*valid_pairs)
+        messages_list = list(messages_list)
+        images_list = list(images_list)
+
+        all_conversations = []
+
+        for messages, image in zip(messages_list, images_list):
+            messages_with_image = []
+            for msg in messages:
+                msg_copy = {'role': msg['role'], 'content': []}
+
+                for content_item in msg['content']:
+                    if content_item is None:
+                        continue
+
+                    if content_item.get('type') == 'text':
+                        text_value = content_item.get('text')
+                        if text_value is not None and text_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'text',
+                                'text': text_value
+                            })
+                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
+                        image_value = content_item.get('image')
+                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image
+                            })
+                        elif image_value and image_value != 'None':
+                            msg_copy['content'].append({
+                                'type': 'image',
+                                'image': image_value
+                            })
+
+                if msg_copy['content']:
+                    messages_with_image.append(msg_copy)
+
+            all_conversations.append(messages_with_image)
+
+        # Apply chat template
+        text = self.processor.apply_chat_template(
+            all_conversations,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+
+        # Process vision info
+        image, video = process_vision_info(all_conversations)
+
+        # Process texts and images together
+        batch_inputs = self.processor(
+            text=text,
+            images=image,
+            padding=True,
+            truncation=False,
+            return_tensors="pt"
+        )
+
+        # Ensure correct dtypes for all tensors
+        if 'input_ids' in batch_inputs:
+            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
+
+        if 'attention_mask' in batch_inputs:
+            batch_inputs['attention_mask'] = batch_inputs['attention_mask'].to(torch.long)
+
+        # Create labels with masking
+        labels = batch_inputs["input_ids"].clone()
+        for token_id in self.masked_token_ids:
+            labels[labels == token_id] = -100
+        batch_inputs["labels"] = labels
+
+        return batch_inputs
