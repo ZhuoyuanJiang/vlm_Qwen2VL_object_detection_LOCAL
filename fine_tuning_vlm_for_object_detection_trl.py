@@ -1464,6 +1464,145 @@ def _summarize_trainables(model_to_summarize):
 # print("\n=== After prepare_model_for_kbit_training ===")
 # _summarize_trainables(model)
 
+# %% [markdown]
+# ## DIAGNOSTIC: BF16 vs 4-bit Trainable Parameters
+#
+# This section compares what's trainable with and without quantization.
+# Run this once to understand the effect of 4-bit quantization.
+# **Skip this section in production training runs.**
+
+# %%
+# ============================================================
+# DIAGNOSTIC: Summarize Trainables by Area
+# ============================================================
+# Enhanced version that groups trainable params by model component
+
+def summarize_trainables_by_area(model, title="Model"):
+    """
+    Summarize trainable parameters grouped by model area.
+    Useful for verifying which parts of the model are being trained.
+    """
+    total_params = 0
+    trainable_params = 0
+    trainable_names = []
+
+    for name, param in model.named_parameters():
+        total_params += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+            trainable_names.append(name)
+
+    pct = 100 * trainable_params / max(total_params, 1)
+
+    print(f"\n{'='*60}")
+    print(f"{title}")
+    print(f"{'='*60}")
+    print(f"Total params:     {total_params:,}")
+    print(f"Trainable params: {trainable_params:,} ({pct:.4f}%)")
+
+    # Count by area
+    # Note: Parameter paths from named_parameters():
+    #       Vision: model.visual.blocks.0.attn.qkv.weight
+    #       LLM:    model.language_model.layers.0.self_attn.q_proj.weight
+    areas = {"visual": 0, "language_model": 0, "lm_head": 0, "other": 0}
+    for name in trainable_names:
+        if ".visual." in name:
+            areas["visual"] += 1
+        elif "language_model" in name:
+            areas["language_model"] += 1
+        elif "lm_head" in name:
+            areas["lm_head"] += 1
+        else:
+            areas["other"] += 1
+
+    print(f"\nTrainable parameter counts by area:")
+    for area, count in areas.items():
+        print(f"  {area:20s}: {count}")
+
+    return trainable_names
+
+# %%
+# --- Compare BF16 vs 4-bit (uncomment to run) ---
+# WARNING: This loads the model twice, uses significant GPU memory!
+# Only run this section once for diagnostic purposes.
+
+"""
+# BF16 load (no quantization)
+model_bf16 = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16,
+    device_map="balanced",
+    attn_implementation="sdpa",
+    trust_remote_code=True,
+)
+summarize_trainables_by_area(model_bf16, "BF16 Base Model (no quantization)")
+del model_bf16
+torch.cuda.empty_cache()
+
+# 4-bit load
+model_4bit = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_id,
+    quantization_config=bnb_config,
+    torch_dtype=torch.bfloat16,
+    device_map="balanced",
+    attn_implementation="sdpa",
+    trust_remote_code=True,
+)
+summarize_trainables_by_area(model_4bit, "4-bit Base Model (before LoRA)")
+del model_4bit
+torch.cuda.empty_cache()
+"""
+
+# %% [markdown]
+# ## DIAGNOSTIC: LoRA Target Verification
+#
+# This temporarily applies `get_peft_model` to verify LoRA targets.
+# **FOR INSPECTION ONLY** - do NOT use this model for training!
+
+# %%
+# --- LoRA Target Verification (uncomment to run) ---
+# Verifies that LoRA targets only LLM layers, not vision encoder
+
+"""
+from peft import LoraConfig as LoraConfigInspect, get_peft_model as get_peft_model_inspect
+
+# Fresh model load for inspection
+model_inspect = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_id,
+    quantization_config=bnb_config,
+    torch_dtype=torch.bfloat16,
+    device_map="balanced",
+    attn_implementation="sdpa",
+    trust_remote_code=True,
+)
+
+# Apply current LoRA config (LLM targets)
+llm_lora_config_inspect = LoraConfigInspect(
+    r=64,
+    lora_alpha=128,
+    lora_dropout=0.1,
+    bias="none",
+    task_type="CAUSAL_LM",
+    target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+)
+
+peft_model = get_peft_model_inspect(model_inspect, llm_lora_config_inspect)
+trainable_names = summarize_trainables_by_area(peft_model, "4-bit + LLM LoRA (get_peft_model)")
+
+# Verify no vision params are trainable
+vision_trainables = [n for n in trainable_names if "visual" in n]
+print(f"\\nVision encoder trainable params: {len(vision_trainables)}")
+if len(vision_trainables) == 0:
+    print("✅ CONFIRMED: LoRA targets LLM only, not vision encoder")
+else:
+    print("⚠️ WARNING: Some vision params are trainable!")
+    for n in vision_trainables[:10]:
+        print(f"  {n}")
+
+del peft_model, model_inspect
+torch.cuda.empty_cache()
+"""
+
 # %% [markdown] id="65wfO29isQlX"
 # ## Set Up QLoRA and SFTConfig 🚀
 #
@@ -1554,7 +1693,7 @@ def create_training_config(
     variant: str,  # e.g., "v1-all-tokens", "v2-assistant-only", "v3-encoder-only"
 
     # === HYPERPARAMETERS (with sensible defaults) ===
-    num_train_epochs: int = 3,
+    num_train_epochs: int = 1,
     per_device_train_batch_size: int = 1,
     per_device_eval_batch_size: int = 1,
     gradient_accumulation_steps: int = 8,
@@ -2971,6 +3110,284 @@ print(f"  Median IoU: {metrics_v2['median_iou']:.4f}")
 print(f"  Detection Rate: {metrics_v2['detection_rate']:.2%}")
 print(f"  IoU > 0.5: {metrics_v2['iou_threshold_0.5']:.2%}")
 print(f"  IoU > 0.7: {metrics_v2['iou_threshold_0.7']:.2%}")
+
+
+# %% [markdown]
+# ## Training Recipes Framework
+#
+# Four recipes to compare different training approaches:
+# - **Recipe 1 (r1)**: LLM-only QLoRA (current baseline)
+# - **Recipe 2 (r2)**: Vision-only full fine-tuning
+# - **Recipe 3 (r3)**: Two-stage (vision first, then LLM)
+# - **Recipe 4 (r4)**: Joint (vision LoRA + LLM LoRA)
+#
+# All recipes use `AssistantOnlyCollator` (the better collator we discovered).
+
+# %%
+# ============================================================
+# TRAINING RECIPES FRAMEWORK
+# ============================================================
+
+from dataclasses import dataclass
+from typing import Optional, List
+
+# --- Target Module Constants ---
+LLM_LORA_TARGETS = [
+    "q_proj", "k_proj", "v_proj", "o_proj",  # Attention
+    "gate_proj", "up_proj", "down_proj",     # MLP (SwiGLU)
+]
+
+VISION_LORA_TARGETS = [
+    "qkv",   # Combined Q,K,V attention
+    "fc1",   # MLP first layer
+    "fc2",   # MLP second layer
+    # NOTE: Omitting "proj" to avoid matching "o_proj" in LLM
+]
+
+
+@dataclass
+class TrainingRecipe:
+    """Configuration for a training recipe."""
+    name: str
+    quantized: bool              # True = 4-bit, False = bf16
+    train_vision: str            # "none" | "full" | "lora"
+    train_llm: str               # "none" | "full" | "lora"
+    lora_target_modules: Optional[List[str]]
+    learning_rate: float
+    description: str
+
+
+RECIPES = {
+    "r1-llm-only": TrainingRecipe(
+        name="r1-llm-only",
+        quantized=True,
+        train_vision="none",
+        train_llm="lora",
+        lora_target_modules=LLM_LORA_TARGETS,
+        learning_rate=1e-4,
+        description="Baseline: LLM-only QLoRA (4-bit), vision frozen",
+    ),
+    "r2-vision-only": TrainingRecipe(
+        name="r2-vision-only",
+        quantized=False,  # bf16 for full fine-tuning
+        train_vision="full",
+        train_llm="none",
+        lora_target_modules=None,
+        learning_rate=5e-5,
+        description="Vision encoder full fine-tuning, LLM frozen",
+    ),
+    "r3-two-stage": TrainingRecipe(
+        name="r3-two-stage",
+        quantized=True,  # Stage 2 uses 4-bit
+        train_vision="none",  # Stage 1 handled separately
+        train_llm="lora",
+        lora_target_modules=LLM_LORA_TARGETS,
+        learning_rate=1e-4,
+        description="Two-stage: Vision first (r2) -> LLM (r1) from checkpoint",
+    ),
+    "r4-joint": TrainingRecipe(
+        name="r4-joint",
+        quantized=True,
+        train_vision="lora",
+        train_llm="lora",
+        lora_target_modules=LLM_LORA_TARGETS + VISION_LORA_TARGETS,
+        learning_rate=1e-4,
+        description="Joint: Vision LoRA + LLM LoRA together",
+    ),
+}
+
+print("Training Recipes defined:")
+for key, recipe in RECIPES.items():
+    print(f"  {key}: {recipe.description}")
+
+# %%
+# ============================================================
+# RECIPE HELPER FUNCTIONS
+# ============================================================
+
+def load_model_for_recipe(model_id: str, recipe: TrainingRecipe, checkpoint_path: str = None):
+    """Load model configured for a specific recipe."""
+    bnb_config_recipe = None
+    if recipe.quantized:
+        bnb_config_recipe = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+
+    load_path = checkpoint_path if checkpoint_path else model_id
+
+    model_recipe = Qwen2VLForConditionalGeneration.from_pretrained(
+        load_path,
+        quantization_config=bnb_config_recipe,
+        torch_dtype=torch.bfloat16,
+        device_map="balanced",
+        attn_implementation="sdpa",
+        trust_remote_code=True,
+    )
+
+    processor_recipe = Qwen2VLProcessor.from_pretrained(
+        model_id,  # Always use original for processor
+        min_pixels=256*28*28,
+        max_pixels=1280*28*28,
+        trust_remote_code=True,
+    )
+
+    model_recipe.config.use_cache = False
+    return model_recipe, processor_recipe
+
+
+def apply_freeze_policy(model, recipe: TrainingRecipe):
+    """Apply freeze/unfreeze based on recipe configuration.
+
+    Parameter paths from named_parameters():
+        Vision: model.visual.blocks.0.attn.qkv.weight
+        LLM:    model.language_model.layers.0.self_attn.q_proj.weight
+    """
+    # Start with everything frozen
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Unfreeze based on recipe
+    if recipe.train_vision == "full":
+        for name, param in model.named_parameters():
+            if ".visual." in name:
+                param.requires_grad = True
+
+    if recipe.train_llm == "full":
+        for name, param in model.named_parameters():
+            # Note: "model.layers" would NOT match "model.language_model.layers"!
+            if "language_model" in name or "lm_head" in name:
+                param.requires_grad = True
+
+    # For LoRA cases, PEFT will handle unfreezing adapter weights
+
+
+def build_lora_config_for_recipe(recipe: TrainingRecipe) -> Optional[LoraConfig]:
+    """Build LoRA config for a recipe, or None if not using LoRA."""
+    if recipe.train_llm != "lora" and recipe.train_vision != "lora":
+        return None
+
+    return LoraConfig(
+        r=64,
+        lora_alpha=128,
+        lora_dropout=0.1,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=recipe.lora_target_modules,
+    )
+
+
+def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
+               checkpoint_path: str = None, num_epochs: int = 3):
+    """
+    Run a complete training recipe.
+
+    Args:
+        recipe_key: Key from RECIPES dict (e.g., "r1-llm-only")
+        model_id: HuggingFace model ID
+        checkpoint_path: Optional path to load from (for two-stage)
+        num_epochs: Number of training epochs
+
+    Returns:
+        Output directory path
+    """
+    recipe = RECIPES[recipe_key]
+
+    print("\n" + "="*80)
+    print(f"RUNNING RECIPE: {recipe.name}")
+    print(f"Description: {recipe.description}")
+    print("="*80)
+
+    # Load model
+    model_recipe, processor_recipe = load_model_for_recipe(model_id, recipe, checkpoint_path)
+
+    # Apply freeze policy
+    apply_freeze_policy(model_recipe, recipe)
+
+    # Build LoRA config
+    lora_config_recipe = build_lora_config_for_recipe(recipe)
+
+    # Create training config
+    training_args_recipe = create_training_config(
+        variant=recipe.name,
+        learning_rate=recipe.learning_rate,
+        num_train_epochs=num_epochs,
+    )
+
+    # Use AssistantOnlyCollator for all recipes
+    collator_recipe = AssistantOnlyCollator(processor_recipe, model_recipe)
+    collator_recipe.debug = False
+
+    # Create trainer
+    trainer_recipe = SFTTrainer(
+        model=model_recipe,
+        args=training_args_recipe,
+        train_dataset=train_dataset_formatted,
+        eval_dataset=eval_dataset_formatted,
+        data_collator=collator_recipe,
+        processing_class=processor_recipe,
+        peft_config=lora_config_recipe,
+    )
+
+    print("\nTrainable parameters after trainer creation:")
+    trainer_recipe.model.print_trainable_parameters()
+
+    # Train
+    trainer_recipe.train()
+
+    # Save
+    trainer_recipe.save_model(training_args_recipe.output_dir)
+    processor_recipe.save_pretrained(training_args_recipe.output_dir)
+
+    print(f"\n✅ Recipe {recipe.name} complete! Saved to: {training_args_recipe.output_dir}")
+
+    return training_args_recipe.output_dir
+
+
+def run_two_stage_recipe(model_id: str = "Qwen/Qwen2-VL-7B-Instruct"):
+    """
+    Run the two-stage recipe (r3):
+    Stage 1: Vision-only training (r2)
+    Stage 2: LLM-only training from Stage 1 checkpoint (r1)
+    """
+    print("\n" + "="*80)
+    print("TWO-STAGE RECIPE (r3)")
+    print("Stage 1: Vision encoder training")
+    print("Stage 2: LLM training from Stage 1 checkpoint")
+    print("="*80)
+
+    # Stage 1: Vision-only
+    stage1_dir = run_recipe("r2-vision-only", model_id)
+
+    # Stage 2: LLM-only from Stage 1 checkpoint
+    stage2_dir = run_recipe("r1-llm-only", model_id, checkpoint_path=stage1_dir)
+
+    return stage2_dir
+
+
+print("\nRecipe helper functions defined!")
+print("Usage:")
+print("  run_recipe('r1-llm-only')       # LLM-only baseline")
+print("  run_recipe('r2-vision-only')    # Vision encoder training")
+print("  run_two_stage_recipe()          # Two-stage training")
+print("  run_recipe('r4-joint')          # Joint vision + LLM")
+
+# %%
+# --- Example Usage (uncomment the recipe you want to run) ---
+
+# Recipe 1: LLM-only (baseline) - same as v2 training above
+# output_dir = run_recipe("r1-llm-only")
+
+# Recipe 2: Vision-only (bf16, freeze LLM)
+# output_dir = run_recipe("r2-vision-only")
+
+# Recipe 3: Two-stage (vision first, then LLM)
+# output_dir = run_two_stage_recipe()
+
+# Recipe 4: Joint (vision LoRA + LLM LoRA) - run after verifying targets
+# output_dir = run_recipe("r4-joint")
 
 
 # =============================================================================
