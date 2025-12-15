@@ -2235,15 +2235,15 @@ trainer.model.print_trainable_parameters()
 
 # %% id="k_jk-U7ULYtA"
 
-# Launch training
-trainer.train()
+# # Launch training
+# trainer.train()
 
-# Save the final model
-print("\nSaving the fine-tuned model...")
-trainer.save_model(training_args.output_dir)
-processor.save_pretrained(training_args.output_dir)
+# # Save the final model
+# print("\nSaving the fine-tuned model...")
+# trainer.save_model(training_args.output_dir)
+# processor.save_pretrained(training_args.output_dir)
 
-print(f"Model saved to {training_args.output_dir}")
+# print(f"Model saved to {training_args.output_dir}")
 
 # %% [markdown] id="6yx_sGW42dN3"
 # # 5. Testing the Fine-Tuned Model 🔍
@@ -3056,31 +3056,31 @@ trainer_v2.model.print_trainable_parameters()
 # =============================================================================
 
 # %%
-# Launch the second training
-print("\n" + "="*80)
-print("🚀 LAUNCHING SECOND TRAINING (ASSISTANT-ONLY)")
-print("="*80)
-print("Training will focus only on learning the bbox coordinates...")
-print("Watch for lower loss values compared to the first training run!")
-print("")
+# # Launch the second training
+# print("\n" + "="*80)
+# print("🚀 LAUNCHING SECOND TRAINING (ASSISTANT-ONLY)")
+# print("="*80)
+# print("Training will focus only on learning the bbox coordinates...")
+# print("Watch for lower loss values compared to the first training run!")
+# print("")
 
-# Train the model
-trainer_v2.train()
+# # Train the model
+# trainer_v2.train()
 
 # %%
-# Save the fine-tuned model
-print("\n💾 Saving the assistant-only fine-tuned model...")
-trainer_v2.save_model(training_args_v2.output_dir)
-processor.save_pretrained(training_args_v2.output_dir)
+# # Save the fine-tuned model
+# print("\n💾 Saving the assistant-only fine-tuned model...")
+# trainer_v2.save_model(training_args_v2.output_dir)
+# processor.save_pretrained(training_args_v2.output_dir)
 
-print(f"✅ Model saved to: {training_args_v2.output_dir}")
-print("\n" + "="*80)
-print("TRAINING COMPLETE!")
-print("="*80)
-print("\nYou now have two trained models:")
-print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
-print(f"2. Assistant-only: {training_args_v2.output_dir}")
-print("\nCompare their performance to see which approach works better!")
+# print(f"✅ Model saved to: {training_args_v2.output_dir}")
+# print("\n" + "="*80)
+# print("TRAINING COMPLETE!")
+# print("="*80)
+# print("\nYou now have two trained models:")
+# print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
+# print(f"2. Assistant-only: {training_args_v2.output_dir}")
+# print("\nCompare their performance to see which approach works better!")
 
 # %%
 # Load and evaluate v2 model
@@ -3141,6 +3141,7 @@ VISION_LORA_TARGETS = [
     "qkv",   # Combined Q,K,V attention
     "fc1",   # MLP first layer
     "fc2",   # MLP second layer
+    "attn.proj",
     # NOTE: Omitting "proj" to avoid matching "o_proj" in LLM
 ]
 
@@ -3280,23 +3281,28 @@ def build_lora_config_for_recipe(recipe: TrainingRecipe) -> Optional[LoraConfig]
 
 
 def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
-               checkpoint_path: str = None, num_epochs: int = 3):
+               checkpoint_path: str = None, num_epochs: int = 1, variant_override: str = None):
     """
-    Run a complete training recipe.
+    Run a complete training recipe (DEMO mode - outputs to -demo paths).
 
     Args:
         recipe_key: Key from RECIPES dict (e.g., "r1-llm-only")
         model_id: HuggingFace model ID
         checkpoint_path: Optional path to load from (for two-stage)
-        num_epochs: Number of training epochs
+        num_epochs: Number of training epochs (default: 1 for quick demo)
+        variant_override: Custom output name (e.g., "r3-stage1-demo" for two-stage)
 
     Returns:
         Output directory path
+
+    Note:
+        For production training (3 epochs), use scripts/train_recipe.py instead.
     """
     recipe = RECIPES[recipe_key]
+    variant_name = variant_override if variant_override else f"{recipe.name}-demo"
 
     print("\n" + "="*80)
-    print(f"RUNNING RECIPE: {recipe.name}")
+    print(f"RUNNING RECIPE: {recipe.name} (DEMO) -> {variant_name}")
     print(f"Description: {recipe.description}")
     print("="*80)
 
@@ -3309,9 +3315,9 @@ def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
     # Build LoRA config
     lora_config_recipe = build_lora_config_for_recipe(recipe)
 
-    # Create training config
+    # Create training config (add -demo suffix to avoid overwriting production models)
     training_args_recipe = create_training_config(
-        variant=recipe.name,
+        variant=variant_name,
         learning_rate=recipe.learning_rate,
         num_train_epochs=num_epochs,
     )
@@ -3332,7 +3338,24 @@ def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
     )
 
     print("\nTrainable parameters after trainer creation:")
-    trainer_recipe.model.print_trainable_parameters()
+    if hasattr(trainer_recipe.model, "print_trainable_parameters"):
+        trainer_recipe.model.print_trainable_parameters()
+    else:
+        # `print_trainable_parameters()` is a PEFT helper method available on PEFT-wrapped models (e.g. `PeftModel`,
+        # used when LoRA is enabled). For non-PEFT runs like `r2-vision-only` (plain `Qwen2VLForConditionalGeneration`),
+        # the method doesn't exist, so we fall back to a simple trainable/total parameter summary.
+        model_to_report = trainer_recipe.model
+        trainable_parameter_count = model_to_report.num_parameters(only_trainable=True)
+        total_parameter_count = model_to_report.num_parameters()
+        trainable_parameter_percent = (
+            100.0 * trainable_parameter_count / total_parameter_count
+            if total_parameter_count
+            else 0.0
+        )
+        print(
+            f"  trainable params: {trainable_parameter_count:,} / {total_parameter_count:,} "
+            f"({trainable_parameter_percent:.4f}%)"
+        )
 
     # Train
     trainer_recipe.train()
@@ -3358,11 +3381,11 @@ def run_two_stage_recipe(model_id: str = "Qwen/Qwen2-VL-7B-Instruct"):
     print("Stage 2: LLM training from Stage 1 checkpoint")
     print("="*80)
 
-    # Stage 1: Vision-only
-    stage1_dir = run_recipe("r2-vision-only", model_id)
+    # Stage 1: Vision-only (separate path to avoid overwriting standalone r2)
+    stage1_dir = run_recipe("r2-vision-only", model_id, variant_override="r3-stage1-demo")
 
-    # Stage 2: LLM-only from Stage 1 checkpoint
-    stage2_dir = run_recipe("r1-llm-only", model_id, checkpoint_path=stage1_dir)
+    # Stage 2: LLM-only from Stage 1 checkpoint (separate path to avoid overwriting standalone r1)
+    stage2_dir = run_recipe("r1-llm-only", model_id, checkpoint_path=stage1_dir, variant_override="r3-stage2-demo")
 
     return stage2_dir
 
@@ -3389,6 +3412,22 @@ print("  run_recipe('r4-joint')          # Joint vision + LLM")
 # Recipe 4: Joint (vision LoRA + LLM LoRA) - run after verifying targets
 # output_dir = run_recipe("r4-joint")
 
+
+
+# %%
+output_dir3 = run_two_stage_recipe()
+
+# %%
+output_dir2 = run_recipe("r2-vision-only")
+
+# %%
+output_dir1 = run_recipe("r1-llm-only")
+
+# %%
+output_dir4 = run_recipe("r4-joint")
+
+
+# %%
 
 # =============================================================================
 # DRAFT / LEGACY COLLATORS
