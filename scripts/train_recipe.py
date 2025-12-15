@@ -433,6 +433,15 @@ def run_recipe(
     collator_recipe = AssistantOnlyCollator(processor_recipe, model_recipe)
     collator_recipe.debug = False
 
+    # Fix for two-stage training: When loading from a checkpoint with multi-GPU,
+    # Trainer may incorrectly wrap the model with DataParallel, which is incompatible
+    # with device_map="balanced" (model parallelism). DataParallel worker threads
+    # don't inherit AMP/autocast context, causing dtype mismatches.
+    # This only affects checkpoint loading; HuggingFace loading handles this correctly.
+    if checkpoint_path and torch.cuda.device_count() > 1:
+        training_args_recipe._n_gpu = 1
+        print("  [Checkpoint fix] Set _n_gpu=1 to prevent DataParallel (device_map parallelism preserved)")
+
     # Create trainer
     trainer_recipe = SFTTrainer(
         model=model_recipe,
