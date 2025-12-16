@@ -81,7 +81,6 @@ The following differences may exist between `scripts/train_recipe.py` and the no
 
 | Item | Script | Notebook |
 |------|--------|----------|
-| Dataset split | `dataset["val"]` | May still use `dataset["test"]` |
 | VISION_LORA_TARGETS | Includes `"attn.proj"` | May not include it |
 | print_trainable_parameters | Guarded | May not be guarded |
 
