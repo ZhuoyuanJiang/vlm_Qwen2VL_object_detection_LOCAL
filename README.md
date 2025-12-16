@@ -4,6 +4,31 @@ Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging i
 
 > **Start Here**: Read [`fine_tuning_vlm_for_object_detection_trl.ipynb`](fine_tuning_vlm_for_object_detection_trl.ipynb) first. This notebook demonstrates the **entire pipeline** from data loading to training to evaluation to deployment. It contains the core logic that all other scripts are built upon. This is the recommended entry point for interviewers, hiring managers, and anyone who wants to learn about this project.
 
+## Demo Results
+
+**Fine-tuned model achieves 86% mean IoU with 100% detection rate** on nutrition table detection task.
+
+### Success Cases (IoU > 0.97)
+
+![Nutrition Table Detection - Success Cases](assets/demo_comparison_grid.png)
+
+*Green (dashed): Ground Truth | Red (solid): Model Prediction*
+
+### Failure Case Analysis
+
+The model occasionally struggles with challenging images:
+
+**Case 1: Model detects wrong region (IoU: 0.000)**
+
+![Failure Case - Wrong Region](assets/demo_failure_case_clear.png)
+
+*The model detects a different nutrition table (bottom) instead of the annotated one (top left). This image has multiple table-like regions.*
+
+**Case 2: Low IoU but potentially better prediction (IoU: 0.493)**
+
+![Failure Case - Shifted](assets/demo_failure_case.png)
+
+*Interestingly, the model's prediction may actually be more accurate than the ground truth annotation - highlighting that low IoU doesn't always mean wrong prediction.*
 ## 🚀 Quick Start
 
 ### 1. Environment Setup
