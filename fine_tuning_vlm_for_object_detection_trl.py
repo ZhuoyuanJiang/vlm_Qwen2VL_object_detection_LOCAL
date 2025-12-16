@@ -3322,6 +3322,15 @@ def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
         num_train_epochs=num_epochs,
     )
 
+    # Fix for two-stage training: prevent DataParallel when loading from checkpoint
+    # When using device_map="balanced", the model is already distributed across GPUs.
+    # HuggingFace Trainer may incorrectly wrap it with DataParallel on top, causing
+    # dtype mismatch errors (float32 activations vs bf16 lm_head).
+    # Setting _n_gpu=1 prevents DataParallel while preserving device_map parallelism.
+    if checkpoint_path and torch.cuda.device_count() > 1:
+        training_args_recipe._n_gpu = 1
+        print("  [Checkpoint fix] Set _n_gpu=1 to prevent DataParallel (device_map parallelism preserved)")
+
     # Use AssistantOnlyCollator for all recipes
     collator_recipe = AssistantOnlyCollator(processor_recipe, model_recipe)
     collator_recipe.debug = False
@@ -3366,7 +3375,18 @@ def run_recipe(recipe_key: str, model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
 
     print(f"\n✅ Recipe {recipe.name} complete! Saved to: {training_args_recipe.output_dir}")
 
-    return training_args_recipe.output_dir
+    # Cleanup to prevent OOM when running multiple recipes
+    out = training_args_recipe.output_dir
+    print(f"   Cleaning up GPU memory...")
+    del trainer_recipe
+    del model_recipe
+    del processor_recipe
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    print(f"   GPU memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+
+    return out
 
 
 def run_two_stage_recipe(model_id: str = "Qwen/Qwen2-VL-7B-Instruct"):
@@ -3413,6 +3433,37 @@ print("  run_recipe('r4-joint')          # Joint vision + LLM")
 # output_dir = run_recipe("r4-joint")
 
 
+# %%
+# --- IMPORTANT: Clean up GPU memory before running recipes ---
+# This cell clears any models/trainers from previous cells to prevent OOM errors.
+
+print("Cleaning up GPU memory before running recipes...")
+print(f"GPU memory before cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+
+# Delete common variables from previous training/evaluation cells (only if they exist)
+vars_to_delete = [
+    'trainer', 'trainer_v2', 'trainer_recipe',
+    'model', 'model_finetuned', 'model_finetuned_v2', 'merged_model',
+    'processor', 'processor_finetuned',
+]
+
+deleted = []
+for var_name in vars_to_delete:
+    if var_name in globals():
+        del globals()[var_name]
+        deleted.append(var_name)
+
+if deleted:
+    print(f"Deleted variables: {deleted}")
+else:
+    print("No variables to delete (already clean)")
+
+gc.collect()
+torch.cuda.empty_cache()
+torch.cuda.synchronize()
+
+print(f"GPU memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+print("Ready to run recipes!")
 
 # %%
 output_dir3 = run_two_stage_recipe()
@@ -3425,6 +3476,196 @@ output_dir1 = run_recipe("r1-llm-only")
 
 # %%
 output_dir4 = run_recipe("r4-joint")
+
+
+# %% [markdown]
+# ## Section 13: Evaluate Demo Models
+#
+# Evaluate all demo models trained in this notebook and compare their performance.
+
+# %%
+# --- Demo Model Evaluation Configuration ---
+
+DEMO_MODEL_PATHS = {
+    "r1-llm-only-demo": "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r1-llm-only-demo",
+    "r2-vision-only-demo": "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r2-vision-only-demo",
+    "r3-stage1-demo": "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r3-stage1-demo",
+    "r3-stage2-demo": "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r3-stage2-demo",
+    "r4-joint-demo": "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-demo",
+}
+
+# Models using LoRA adapters (need to load base model + adapters)
+LORA_DEMO_RECIPES = {"r1-llm-only-demo", "r3-stage2-demo", "r4-joint-demo"}
+
+# Models with full fine-tuning (load directly)
+FULL_FINETUNE_DEMOS = {"r2-vision-only-demo", "r3-stage1-demo"}
+
+print("Demo model paths configured!")
+print(f"  LoRA demos: {LORA_DEMO_RECIPES}")
+print(f"  Full fine-tune demos: {FULL_FINETUNE_DEMOS}")
+
+# %%
+def load_and_evaluate_demo(recipe_name: str, model_path: str, eval_dataset,
+                           base_model_id: str = "Qwen/Qwen2-VL-7B-Instruct",
+                           num_samples: int = 50):
+    """
+    Load a demo model and evaluate it.
+
+    Args:
+        recipe_name: Name of the recipe (e.g., "r1-llm-only-demo")
+        model_path: Path to the saved model
+        eval_dataset: Dataset to evaluate on
+        base_model_id: Base model ID for LoRA loading
+        num_samples: Number of samples to evaluate
+
+    Returns:
+        Tuple of (metrics, ious) or (None, None) if loading fails
+    """
+    import os
+
+    print(f"\n{'='*60}")
+    print(f"Evaluating: {recipe_name}")
+    print(f"Path: {model_path}")
+    print(f"{'='*60}")
+
+    # Check if model exists
+    if not os.path.exists(model_path):
+        print(f"  Model not found at {model_path}")
+        return None, None
+
+    is_lora = recipe_name in LORA_DEMO_RECIPES
+
+    try:
+        if is_lora:
+            # LoRA model: load base + adapters
+            print(f"  Loading as LoRA model...")
+            model_eval = Qwen2VLForConditionalGeneration.from_pretrained(
+                base_model_id,
+                torch_dtype=torch.bfloat16,
+                device_map="balanced",
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+            )
+            model_eval = PeftModel.from_pretrained(model_eval, model_path, torch_dtype=torch.bfloat16)
+        else:
+            # Full fine-tuned: load directly from path
+            print(f"  Loading as full fine-tuned model...")
+            model_eval = Qwen2VLForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=torch.bfloat16,
+                device_map="balanced",
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+            )
+
+        model_eval.eval()
+
+        # Load processor from model path (it was saved there during training)
+        processor_eval = Qwen2VLProcessor.from_pretrained(
+            model_path,
+            min_pixels=256*28*28,
+            max_pixels=1280*28*28,
+            trust_remote_code=True,
+        )
+
+        # Run evaluation
+        print(f"  Running evaluation on {num_samples} samples...")
+        metrics, ious = evaluate_model(model_eval, processor_eval, eval_dataset, num_samples=num_samples)
+
+        # Print results
+        print(f"\n  Results for {recipe_name}:")
+        print(f"    Mean IoU: {metrics['mean_iou']:.4f}")
+        print(f"    Median IoU: {metrics['median_iou']:.4f}")
+        print(f"    Detection Rate: {metrics['detection_rate']:.2%}")
+        print(f"    IoU > 0.5: {metrics['iou_threshold_0.5']:.2%}")
+        print(f"    IoU > 0.7: {metrics['iou_threshold_0.7']:.2%}")
+
+        # Cleanup
+        del model_eval
+        del processor_eval
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return metrics, ious
+
+    except Exception as e:
+        print(f"  Error loading/evaluating {recipe_name}: {e}")
+        gc.collect()
+        torch.cuda.empty_cache()
+        return None, None
+
+print("load_and_evaluate_demo() function defined!")
+
+# %%
+# --- Run Evaluation on All Demo Models ---
+
+print("\n" + "="*80)
+print("EVALUATING ALL DEMO MODELS")
+print("="*80)
+
+# Use the eval_dataset that was loaded earlier in the notebook
+# (from dataset = load_dataset("openfoodfacts/nutrition-table-detection"))
+
+demo_metrics = {}
+demo_ious = {}
+
+for recipe_name, model_path in DEMO_MODEL_PATHS.items():
+    metrics, ious = load_and_evaluate_demo(
+        recipe_name,
+        model_path,
+        eval_dataset,  # Use the eval_dataset defined earlier
+        num_samples=50
+    )
+    if metrics:
+        demo_metrics[recipe_name] = metrics
+        demo_ious[recipe_name] = ious
+
+print(f"\n{'='*60}")
+print(f"Demo evaluation complete! Evaluated {len(demo_metrics)} models.")
+print(f"{'='*60}")
+
+# %%
+# --- Summary Table ---
+
+print("\n" + "="*80)
+print("DEMO MODEL COMPARISON SUMMARY")
+print("="*80)
+
+print(f"\n{'Model':<25} {'Mean IoU':>10} {'Det Rate':>10} {'IoU>0.5':>10} {'IoU>0.7':>10}")
+print("-"*80)
+
+# Print results in recipe order
+for recipe_name in ["r1-llm-only-demo", "r2-vision-only-demo", "r3-stage1-demo",
+                    "r3-stage2-demo", "r4-joint-demo"]:
+    if recipe_name in demo_metrics:
+        m = demo_metrics[recipe_name]
+        print(f"{recipe_name:<25} {m['mean_iou']:>10.4f} {m['detection_rate']:>10.2%} "
+              f"{m['iou_threshold_0.5']:>10.2%} {m['iou_threshold_0.7']:>10.2%}")
+    else:
+        print(f"{recipe_name:<25} {'N/A':>10} {'N/A':>10} {'N/A':>10} {'N/A':>10}")
+
+print("-"*80)
+
+# Determine best model
+if demo_metrics:
+    best_demo = max(demo_metrics.items(), key=lambda x: x[1]['mean_iou'])
+    print(f"\nBest Demo Model: {best_demo[0]} (Mean IoU: {best_demo[1]['mean_iou']:.4f})")
+
+    # Additional insights
+    print("\nInsights:")
+    if "r3-stage2-demo" in demo_metrics and "r1-llm-only-demo" in demo_metrics:
+        r3_iou = demo_metrics["r3-stage2-demo"]["mean_iou"]
+        r1_iou = demo_metrics["r1-llm-only-demo"]["mean_iou"]
+        print(f"  - Two-stage (r3) vs LLM-only (r1): {'+' if r3_iou > r1_iou else ''}{(r3_iou - r1_iou):.4f}")
+
+    if "r4-joint-demo" in demo_metrics and "r1-llm-only-demo" in demo_metrics:
+        r4_iou = demo_metrics["r4-joint-demo"]["mean_iou"]
+        r1_iou = demo_metrics["r1-llm-only-demo"]["mean_iou"]
+        print(f"  - Joint (r4) vs LLM-only (r1): {'+' if r4_iou > r1_iou else ''}{(r4_iou - r1_iou):.4f}")
+else:
+    print("\nNo demo models found. Run the recipe training cells first.")
+
+print("\n" + "="*80)
 
 
 # %%
