@@ -2235,15 +2235,15 @@ trainer.model.print_trainable_parameters()
 
 # %% id="k_jk-U7ULYtA"
 
-# # Launch training
-# trainer.train()
+# Launch training
+trainer.train()
 
-# # Save the final model
-# print("\nSaving the fine-tuned model...")
-# trainer.save_model(training_args.output_dir)
-# processor.save_pretrained(training_args.output_dir)
+# Save the final model
+print("\nSaving the fine-tuned model...")
+trainer.save_model(training_args.output_dir)
+processor.save_pretrained(training_args.output_dir)
 
-# print(f"Model saved to {training_args.output_dir}")
+print(f"Model saved to {training_args.output_dir}")
 
 # %% [markdown] id="6yx_sGW42dN3"
 # # 5. Testing the Fine-Tuned Model 🔍
@@ -3056,31 +3056,31 @@ trainer_v2.model.print_trainable_parameters()
 # =============================================================================
 
 # %%
-# # Launch the second training
-# print("\n" + "="*80)
-# print("🚀 LAUNCHING SECOND TRAINING (ASSISTANT-ONLY)")
-# print("="*80)
-# print("Training will focus only on learning the bbox coordinates...")
-# print("Watch for lower loss values compared to the first training run!")
-# print("")
+# Launch the second training
+print("\n" + "="*80)
+print("🚀 LAUNCHING SECOND TRAINING (ASSISTANT-ONLY)")
+print("="*80)
+print("Training will focus only on learning the bbox coordinates...")
+print("Watch for lower loss values compared to the first training run!")
+print("")
 
-# # Train the model
-# trainer_v2.train()
+# Train the model
+trainer_v2.train()
 
 # %%
-# # Save the fine-tuned model
-# print("\n💾 Saving the assistant-only fine-tuned model...")
-# trainer_v2.save_model(training_args_v2.output_dir)
-# processor.save_pretrained(training_args_v2.output_dir)
+# Save the fine-tuned model
+print("\n💾 Saving the assistant-only fine-tuned model...")
+trainer_v2.save_model(training_args_v2.output_dir)
+processor.save_pretrained(training_args_v2.output_dir)
 
-# print(f"✅ Model saved to: {training_args_v2.output_dir}")
-# print("\n" + "="*80)
-# print("TRAINING COMPLETE!")
-# print("="*80)
-# print("\nYou now have two trained models:")
-# print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
-# print(f"2. Assistant-only: {training_args_v2.output_dir}")
-# print("\nCompare their performance to see which approach works better!")
+print(f"✅ Model saved to: {training_args_v2.output_dir}")
+print("\n" + "="*80)
+print("TRAINING COMPLETE!")
+print("="*80)
+print("\nYou now have two trained models:")
+print(f"1. Original (all tokens): /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-lora")
+print(f"2. Assistant-only: {training_args_v2.output_dir}")
+print("\nCompare their performance to see which approach works better!")
 
 # %%
 # Load and evaluate v2 model
@@ -3466,13 +3466,15 @@ print(f"GPU memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} 
 print("Ready to run recipes!")
 
 # %%
-output_dir3 = run_two_stage_recipe()
+# Uncomment to start training
+output_dir1 = run_recipe("r1-llm-only")
+
 
 # %%
 output_dir2 = run_recipe("r2-vision-only")
 
 # %%
-output_dir1 = run_recipe("r1-llm-only")
+output_dir3 = run_two_stage_recipe()
 
 # %%
 output_dir4 = run_recipe("r4-joint")
@@ -3537,10 +3539,23 @@ def load_and_evaluate_demo(recipe_name: str, model_path: str, eval_dataset,
 
     try:
         if is_lora:
-            # LoRA model: load base + adapters
+            # Read adapter_config.json to find the correct base model
+            # (e.g., r3-stage2-demo was trained on r3-stage1-demo, not the original Qwen base, so reading adapter_config.json is more reliable)
+            import json
+            adapter_config_path = os.path.join(model_path, "adapter_config.json")
+            if os.path.exists(adapter_config_path):
+                with open(adapter_config_path) as f:
+                    adapter_config = json.load(f)
+                actual_base = adapter_config.get("base_model_name_or_path", base_model_id)
+                print(f"  Base model (from adapter_config): {actual_base}")
+            else:
+                actual_base = base_model_id
+                print(f"  Base model (default): {actual_base}")
+
+            # LoRA model: load correct base + adapters
             print(f"  Loading as LoRA model...")
             model_eval = Qwen2VLForConditionalGeneration.from_pretrained(
-                base_model_id,
+                actual_base,  # USE actual_base instead of base_model_id
                 torch_dtype=torch.bfloat16,
                 device_map="balanced",
                 attn_implementation="sdpa",
@@ -3667,168 +3682,167 @@ else:
 
 print("\n" + "="*80)
 
-
 # %%
 
-# =============================================================================
-# DRAFT / LEGACY COLLATORS
-# =============================================================================
-# The following collators are kept for reference but are NOT used in training.
-# =============================================================================
+# # =============================================================================
+# # DRAFT / LEGACY COLLATORS
+# # =============================================================================
+# # The following collators are kept for reference but are NOT used in training.
+# # =============================================================================
 
-class FlashAttentionPatchCollator:
-    """
-    LEGACY: Flash Attention dtype workaround.
+# class FlashAttentionPatchCollator:
+#     """
+#     LEGACY: Flash Attention dtype workaround.
 
-    This was a workaround for Flash Attention 2 requiring bfloat16 pixel values.
-    Since training now uses sdpa (not flash_attention_2), this is NOT needed.
+#     This was a workaround for Flash Attention 2 requiring bfloat16 pixel values.
+#     Since training now uses sdpa (not flash_attention_2), this is NOT needed.
 
-    Kept for reference in case flash_attention_2 is used for inference.
+#     Kept for reference in case flash_attention_2 is used for inference.
 
-    The error "RuntimeError: cu_seqlens_q must have dtype int32" occurs because
-    Flash Attention expects cumulative sequence length tensors to be int32,
-    but they're created as int64 internally.
+#     The error "RuntimeError: cu_seqlens_q must have dtype int32" occurs because
+#     Flash Attention expects cumulative sequence length tensors to be int32,
+#     but they're created as int64 internally.
 
-    This collator patches the Flash Attention forward pass to ensure cu_seqlens
-    tensors have the correct dtype.
-    """
+#     This collator patches the Flash Attention forward pass to ensure cu_seqlens
+#     tensors have the correct dtype.
+#     """
 
-    def __init__(self, processor, model):
-        self.processor = processor
-        self.model = model
-        self.masked_token_ids = [
-            self.processor.tokenizer.pad_token_id,
-            self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
-            self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
-            self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
-        ]
-        self.call_count = 0  # Track calls to limit debug output
+#     def __init__(self, processor, model):
+#         self.processor = processor
+#         self.model = model
+#         self.masked_token_ids = [
+#             self.processor.tokenizer.pad_token_id,
+#             self.processor.tokenizer.convert_tokens_to_ids('<|vision_start|>'),
+#             self.processor.tokenizer.convert_tokens_to_ids('<|vision_end|>'),
+#             self.processor.tokenizer.convert_tokens_to_ids('<|image_pad|>')
+#         ]
+#         self.call_count = 0  # Track calls to limit debug output
 
-        # Apply monkey patch to fix cu_seqlens dtype issue
-        self._patch_flash_attention()
+#         # Apply monkey patch to fix cu_seqlens dtype issue
+#         self._patch_flash_attention()
 
-    def _patch_flash_attention(self):
-        """Monkey-patch Flash Attention to fix cu_seqlens dtype."""
-        import flash_attn.flash_attn_interface as flash_interface
+#     def _patch_flash_attention(self):
+#         """Monkey-patch Flash Attention to fix cu_seqlens dtype."""
+#         import flash_attn.flash_attn_interface as flash_interface
 
-        # Store original _flash_attn_varlen_forward function
-        original_flash_varlen_forward = flash_interface._flash_attn_varlen_forward
+#         # Store original _flash_attn_varlen_forward function
+#         original_flash_varlen_forward = flash_interface._flash_attn_varlen_forward
 
-        def patched_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
-                                        max_seqlen_q, max_seqlen_k, *args, **kwargs):
-            # Convert cu_seqlens to int32 if needed
-            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
-                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
-            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
-                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+#         def patched_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
+#                                         max_seqlen_q, max_seqlen_k, *args, **kwargs):
+#             # Convert cu_seqlens to int32 if needed
+#             if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+#                 cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+#             if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+#                 cu_seqlens_k = cu_seqlens_k.to(torch.int32)
 
-            # Call original function with fixed dtypes
-            return original_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
-                                                max_seqlen_q, max_seqlen_k, *args, **kwargs)
+#             # Call original function with fixed dtypes
+#             return original_flash_varlen_forward(q, k, v, cu_seqlens_q, cu_seqlens_k,
+#                                                 max_seqlen_q, max_seqlen_k, *args, **kwargs)
 
-        # Replace the internal _flash_attn_varlen_forward function
-        flash_interface._flash_attn_varlen_forward = patched_flash_varlen_forward
+#         # Replace the internal _flash_attn_varlen_forward function
+#         flash_interface._flash_attn_varlen_forward = patched_flash_varlen_forward
 
-        # Also patch the FlashAttnVarlenFunc.forward method
-        from flash_attn.flash_attn_interface import FlashAttnVarlenFunc
-        original_forward = FlashAttnVarlenFunc.forward
+#         # Also patch the FlashAttnVarlenFunc.forward method
+#         from flash_attn.flash_attn_interface import FlashAttnVarlenFunc
+#         original_forward = FlashAttnVarlenFunc.forward
 
-        @staticmethod
-        def patched_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
-                          max_seqlen_q, max_seqlen_k, *args):
-            # Convert cu_seqlens to int32 if needed
-            if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
-                cu_seqlens_q = cu_seqlens_q.to(torch.int32)
-            if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
-                cu_seqlens_k = cu_seqlens_k.to(torch.int32)
+#         @staticmethod
+#         def patched_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
+#                           max_seqlen_q, max_seqlen_k, *args):
+#             # Convert cu_seqlens to int32 if needed
+#             if cu_seqlens_q is not None and cu_seqlens_q.dtype != torch.int32:
+#                 cu_seqlens_q = cu_seqlens_q.to(torch.int32)
+#             if cu_seqlens_k is not None and cu_seqlens_k.dtype != torch.int32:
+#                 cu_seqlens_k = cu_seqlens_k.to(torch.int32)
 
-            # Call original forward with fixed dtypes
-            return original_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
-                                   max_seqlen_q, max_seqlen_k, *args)
+#             # Call original forward with fixed dtypes
+#             return original_forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k,
+#                                    max_seqlen_q, max_seqlen_k, *args)
 
-        FlashAttnVarlenFunc.forward = patched_forward
-        print("✅ Applied Flash Attention cu_seqlens dtype patch (both _flash_attn_varlen_forward and FlashAttnVarlenFunc.forward)")
+#         FlashAttnVarlenFunc.forward = patched_forward
+#         print("✅ Applied Flash Attention cu_seqlens dtype patch (both _flash_attn_varlen_forward and FlashAttnVarlenFunc.forward)")
 
-    def __call__(self, batch):
-        # Extract messages and images from each sample
-        messages_list = [sample['messages'] for sample in batch]
-        images_list = [sample.get('image', None) for sample in batch]
+#     def __call__(self, batch):
+#         # Extract messages and images from each sample
+#         messages_list = [sample['messages'] for sample in batch]
+#         images_list = [sample.get('image', None) for sample in batch]
 
-        # Filter out samples without images
-        valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
-        if not valid_pairs:
-            raise ValueError("Batch contains no valid images.")
+#         # Filter out samples without images
+#         valid_pairs = [(m, img) for m, img in zip(messages_list, images_list) if img is not None]
+#         if not valid_pairs:
+#             raise ValueError("Batch contains no valid images.")
 
-        messages_list, images_list = zip(*valid_pairs)
-        messages_list = list(messages_list)
-        images_list = list(images_list)
+#         messages_list, images_list = zip(*valid_pairs)
+#         messages_list = list(messages_list)
+#         images_list = list(images_list)
 
-        all_conversations = []
+#         all_conversations = []
 
-        for messages, image in zip(messages_list, images_list):
-            messages_with_image = []
-            for msg in messages:
-                msg_copy = {'role': msg['role'], 'content': []}
+#         for messages, image in zip(messages_list, images_list):
+#             messages_with_image = []
+#             for msg in messages:
+#                 msg_copy = {'role': msg['role'], 'content': []}
 
-                for content_item in msg['content']:
-                    if content_item is None:
-                        continue
+#                 for content_item in msg['content']:
+#                     if content_item is None:
+#                         continue
 
-                    if content_item.get('type') == 'text':
-                        text_value = content_item.get('text')
-                        if text_value is not None and text_value != 'None':
-                            msg_copy['content'].append({
-                                'type': 'text',
-                                'text': text_value
-                            })
-                    elif content_item.get('type') == 'image' and msg['role'] == 'user':
-                        image_value = content_item.get('image')
-                        if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
-                            msg_copy['content'].append({
-                                'type': 'image',
-                                'image': image
-                            })
-                        elif image_value and image_value != 'None':
-                            msg_copy['content'].append({
-                                'type': 'image',
-                                'image': image_value
-                            })
+#                     if content_item.get('type') == 'text':
+#                         text_value = content_item.get('text')
+#                         if text_value is not None and text_value != 'None':
+#                             msg_copy['content'].append({
+#                                 'type': 'text',
+#                                 'text': text_value
+#                             })
+#                     elif content_item.get('type') == 'image' and msg['role'] == 'user':
+#                         image_value = content_item.get('image')
+#                         if image_value == 'IMAGE_PLACEHOLDER' or image_value is None:
+#                             msg_copy['content'].append({
+#                                 'type': 'image',
+#                                 'image': image
+#                             })
+#                         elif image_value and image_value != 'None':
+#                             msg_copy['content'].append({
+#                                 'type': 'image',
+#                                 'image': image_value
+#                             })
 
-                if msg_copy['content']:
-                    messages_with_image.append(msg_copy)
+#                 if msg_copy['content']:
+#                     messages_with_image.append(msg_copy)
 
-            all_conversations.append(messages_with_image)
+#             all_conversations.append(messages_with_image)
 
-        # Apply chat template
-        text = self.processor.apply_chat_template(
-            all_conversations,
-            tokenize=False,
-            add_generation_prompt=False
-        )
+#         # Apply chat template
+#         text = self.processor.apply_chat_template(
+#             all_conversations,
+#             tokenize=False,
+#             add_generation_prompt=False
+#         )
 
-        # Process vision info
-        image, video = process_vision_info(all_conversations)
+#         # Process vision info
+#         image, video = process_vision_info(all_conversations)
 
-        # Process texts and images together
-        batch_inputs = self.processor(
-            text=text,
-            images=image,
-            padding=True,
-            truncation=False,
-            return_tensors="pt"
-        )
+#         # Process texts and images together
+#         batch_inputs = self.processor(
+#             text=text,
+#             images=image,
+#             padding=True,
+#             truncation=False,
+#             return_tensors="pt"
+#         )
 
-        # Ensure correct dtypes for all tensors
-        if 'input_ids' in batch_inputs:
-            batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
+#         # Ensure correct dtypes for all tensors
+#         if 'input_ids' in batch_inputs:
+#             batch_inputs['input_ids'] = batch_inputs['input_ids'].to(torch.long)
 
-        if 'attention_mask' in batch_inputs:
-            batch_inputs['attention_mask'] = batch_inputs['attention_mask'].to(torch.long)
+#         if 'attention_mask' in batch_inputs:
+#             batch_inputs['attention_mask'] = batch_inputs['attention_mask'].to(torch.long)
 
-        # Create labels with masking
-        labels = batch_inputs["input_ids"].clone()
-        for token_id in self.masked_token_ids:
-            labels[labels == token_id] = -100
-        batch_inputs["labels"] = labels
+#         # Create labels with masking
+#         labels = batch_inputs["input_ids"].clone()
+#         for token_id in self.masked_token_ids:
+#             labels[labels == token_id] = -100
+#         batch_inputs["labels"] = labels
 
-        return batch_inputs
+#         return batch_inputs
