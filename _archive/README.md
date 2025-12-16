@@ -11,6 +11,7 @@ These files are NOT part of the main codebase and should not be reviewed or used
 | `ORIGINAL_fine_tuning_vlm_for_object_detection_trl.ipynb` | Original notebook before major refactoring |
 | `step_by_step_debugging_output.ipynb` | Debugging notebook from data collator investigation |
 | `Notes_on_bbox.md` | Notes on bounding box formats |
+| `IMPORTANT_LESSON.md` | Key lessons learned (HuggingFace datasets, bbox formats, TRL setup) |
 
 ## Note
 
