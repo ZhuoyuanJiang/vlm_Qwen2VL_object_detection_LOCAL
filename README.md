@@ -28,7 +28,7 @@ The model occasionally struggles with challenging images:
 
 ![Failure Case - Shifted](assets/demo_failure_case.png)
 
-*Interestingly, the model's prediction may actually be more accurate than the ground truth annotation - highlighting that low IoU doesn't always mean wrong prediction.*
+*Interestingly, the model's prediction may actually be more accurate than the ground truth annotation - highlighting that low IoU doesn't always mean wrong prediction and our model's performance is very strong!*
 ## 🚀 Quick Start
 
 ### 1. Environment Setup
@@ -299,9 +299,8 @@ Based on evaluation of 50 test samples:
 - **Training**: Completion-only loss on assistant responses
 
 ### Hardware
-- **Tested on**: RTX 6000 Ada (47.50 GB VRAM)
-- **Minimum Required**: 24GB VRAM
-- **Multi-GPU**: Supported via device_map="balanced"
+- **Tested on**: 2x NVIDIA RTX 6000 Ada (48GB VRAM each, 96GB total)
+- **Multi-GPU**: Supported via device_map="balanced" (model parallelism)
 
 ### Key Hyperparameters
 - **Batch Size**: 2 per device
