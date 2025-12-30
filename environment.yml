@@ -1,3 +1,16 @@
+# =============================================================================
+# IMPORTANT: DO NOT MODIFY THIS FILE OR RUN `conda env export`
+# =============================================================================
+# This is the "golden" reproducible environment for training and inference.
+# Snapshot date: 2025-12-16
+#
+# For vLLM/Triton deployment: Use Docker (see notebooks/07_deployment_vllm_triton.ipynb)
+# Do NOT install vLLM into this conda environment - it will break dependencies.
+#
+# To recreate this environment:
+#   conda env create -f environment.yml
+# =============================================================================
+
 name: vlm_Qwen2VL_object_detection
 channels:
   - defaults
