@@ -28,6 +28,33 @@
 # **Prerequisites**:
 # - Checkpoints transferred from vllab13 to local `/ssd1/zhuoyuan/vlm_outputs/`
 # - GPU with sufficient VRAM (~16GB for bf16 model)
+# - Docker installed (for vLLM and Triton servers)
+
+# %% [markdown]
+# ### ⚠️ IMPORTANT: Docker-Based Deployment
+#
+# **This notebook uses Docker for vLLM and Triton servers.**
+#
+# **Why Docker instead of `pip install vllm`?**
+# - vLLM 0.13.0 requires PyTorch 2.9.0
+# - Our training environment uses PyTorch 2.4.1 (for flash-attn compatibility)
+# - Installing vLLM in conda would break training/inference notebooks
+# - Docker isolates vLLM's dependencies completely
+#
+# **How it works:**
+# ```
+# ┌─────────────────────────────────────────┐
+# │  Terminal: docker run vllm ...          │
+# │  → Starts server on localhost:8000      │
+# └─────────────────────────────────────────┘
+#                      ↓ HTTP API
+# ┌─────────────────────────────────────────┐
+# │  This Notebook (conda env)              │
+# │  → Calls API via requests/openai        │
+# └─────────────────────────────────────────┘
+# ```
+#
+# **Do NOT run `pip install vllm` in your conda environment!**
 
 # %% [markdown]
 # ## Section 1: Configuration & Setup
@@ -128,22 +155,26 @@ else:
 # %% [markdown]
 # ### 1.3 Install Dependencies
 #
-# Run this cell if you haven't installed vLLM and Triton client yet.
+# **Note**: We only install the *client* libraries here, NOT vLLM itself.
+# vLLM runs in Docker, so we don't need it in our conda environment.
 
 # %%
-# Uncomment to install dependencies:
-# !pip install vllm>=0.6.0
-# !pip install tritonclient[all]
-# !pip install openai
+# Install client libraries (safe - won't break your environment)
+# Uncomment if not already installed:
+# !pip install tritonclient[all]  # For Triton API calls
+# !pip install openai             # For vLLM API calls (OpenAI-compatible)
+
+# ⚠️ DO NOT install vllm here! Use Docker instead.
+# Installing vllm will upgrade PyTorch and break flash-attn.
 
 # %%
-# Check if dependencies are installed
+# Check if client dependencies are installed
 import importlib.util
 
 deps = {
-    "vllm": "vLLM (inference server)",
-    "openai": "OpenAI client (for testing)",
-    "tritonclient": "Triton client",
+    "openai": "OpenAI client (for vLLM API)",
+    "tritonclient": "Triton client (for Triton API)",
+    "requests": "HTTP client (alternative to openai)",
 }
 
 print("Dependency check:")
@@ -343,71 +374,62 @@ else:
 # | Industry standard   | Many inference servers now support this format                               |
 
 # %%
-import subprocess
 import time
-import signal
 import requests
 
-# Build the vLLM command
-vllm_cmd = [
-    "python", "-m", "vllm.entrypoints.openai.api_server",
-    "--model", MERGED_MODEL_PATH,
-    "--served-model-name", VLLM_MODEL_NAME,
-    "--host", VLLM_HOST,
-    "--port", str(VLLM_PORT),
-    "--dtype", "bfloat16",
-    "--trust-remote-code",
-    "--max-model-len", "4096",  # Limit context length for memory
-]
+# Build the Docker command for vLLM
+docker_vllm_cmd = f"""docker run --gpus all -d --name vllm-server \\
+  -p {VLLM_PORT}:8000 \\
+  -v {MERGED_MODEL_PATH}:/model:ro \\
+  --ipc=host \\
+  vllm/vllm-openai:v0.6.4.post1 \\
+  --model /model \\
+  --served-model-name {VLLM_MODEL_NAME} \\
+  --dtype bfloat16 \\
+  --trust-remote-code \\
+  --max-model-len 4096"""
 
-print("vLLM Launch Command:")
-print(" ".join(vllm_cmd))
+print("=" * 60)
+print("vLLM Docker Launch Command")
+print("=" * 60)
 print()
-print("To launch manually in a terminal, run:")
-print(f"  cd {Path.cwd()}")
-print(f"  {' '.join(vllm_cmd)}")
+print("Run this in a terminal to start the vLLM server:")
+print()
+print(docker_vllm_cmd)
+print()
+print("=" * 60)
+print("Useful Docker commands:")
+print("  docker logs -f vllm-server    # View logs")
+print("  docker stop vllm-server       # Stop server")
+print("  docker rm vllm-server         # Remove container")
+print("=" * 60)
 
 # %% [markdown]
-# ### 3.1.1 Launch vLLM (Background Process)
+# ### 3.1.1 Launch vLLM (Docker)
 #
-# **Option A**: Run this cell to launch vLLM as a background subprocess.
+# **Step 1**: Open a terminal and run the Docker command printed above.
 #
-# **Option B**: Open a new terminal and run the command printed above.
+# **Step 2**: Wait for the server to start (~1-2 minutes for model loading).
+#
+# **Step 3**: Run the cell below to verify the server is ready.
 
 # %%
-# Launch vLLM server as background process
-# Set to True to launch, False to skip (if running manually)
-LAUNCH_VLLM = False  # Change to True to launch from notebook
+# Check if vLLM server is running
+def check_vllm_server(port=8000, timeout=5):
+    """Check if vLLM server is running and ready."""
+    try:
+        resp = requests.get(f"http://localhost:{port}/health", timeout=timeout)
+        if resp.status_code == 200:
+            print(f"✅ vLLM server is running on port {port}")
+            return True
+    except requests.exceptions.ConnectionError:
+        print(f"❌ vLLM server not running on port {port}")
+        print("   Run the Docker command above to start it.")
+    except requests.exceptions.Timeout:
+        print(f"⚠️ vLLM server on port {port} is not responding (timeout)")
+    return False
 
-if LAUNCH_VLLM:
-    print("Launching vLLM server...")
-    vllm_process = subprocess.Popen(
-        vllm_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    print(f"✓ vLLM process started (PID: {vllm_process.pid})")
-
-    # Wait for server to be ready
-    print("Waiting for server to be ready...")
-    max_wait = 120  # seconds
-    start = time.time()
-    while time.time() - start < max_wait:
-        try:
-            resp = requests.get(f"http://localhost:{VLLM_PORT}/health")
-            if resp.status_code == 200:
-                print(f"✓ Server ready! (took {time.time() - start:.1f}s)")
-                break
-        except requests.exceptions.ConnectionError:
-            pass
-        time.sleep(2)
-    else:
-        print(f"⚠ Server not ready after {max_wait}s")
-else:
-    print("LAUNCH_VLLM is False - launch vLLM manually in a terminal:")
-    print(f"  {' '.join(vllm_cmd)}")
-    vllm_process = None
+check_vllm_server(VLLM_PORT)
 
 # %% [markdown]
 # ### 3.2 Test vLLM API
@@ -681,20 +703,30 @@ print(f"Model output: {result['choices'][0]['message']['content']}")
 # Run this cell when you're done testing vLLM.
 
 # %%
-def stop_vllm():
-    """Stop the vLLM server if running."""
-    if 'vllm_process' in globals() and vllm_process is not None:
-        print("Stopping vLLM server...")
-        vllm_process.terminate()
-        vllm_process.wait(timeout=10)
-        print("✓ vLLM server stopped")
-    else:
-        print("vLLM not launched from notebook")
-        print("If running manually, press Ctrl+C in the terminal")
+import subprocess
+
+def stop_vllm_docker():
+    """Stop the vLLM Docker container."""
+    try:
+        # Check if container exists
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", "name=vllm-server", "--format", "{{.Names}}"],
+            capture_output=True, text=True
+        )
+        if "vllm-server" in result.stdout:
+            print("Stopping vLLM Docker container...")
+            subprocess.run(["docker", "stop", "vllm-server"], check=True)
+            subprocess.run(["docker", "rm", "vllm-server"], check=True)
+            print("✅ vLLM container stopped and removed")
+        else:
+            print("No vLLM container found")
+    except Exception as e:
+        print(f"Error: {e}")
+        print("You can manually stop with: docker stop vllm-server && docker rm vllm-server")
 
 
 # Uncomment to stop:
-# stop_vllm()
+# stop_vllm_docker()
 
 # %% [markdown]
 # ## Section 4: Triton Deployment
