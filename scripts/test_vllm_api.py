@@ -27,7 +27,6 @@ response = requests.post(
         ],
         "max_tokens": 64,
         "temperature": 0.0,
-        "stop": ["<|box_end|>"],  # Stop after box_end token
         "skip_special_tokens": False  # Include special tokens in output!
     },
     timeout=60

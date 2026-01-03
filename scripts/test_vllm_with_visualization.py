@@ -179,7 +179,6 @@ def test_vllm_inference(image_path: str):
             ],
             "max_tokens": 64,
             "temperature": 0.0,
-            "stop": ["<|box_end|>"],
             "skip_special_tokens": False
         },
         timeout=60

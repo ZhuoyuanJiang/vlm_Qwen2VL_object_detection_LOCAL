@@ -470,8 +470,8 @@ class AssistantOnlyCollator:
                 assistant_end_pos = text.find(self.assistant_end_token, response_start_in_text)
 
                 if assistant_end_pos != -1:
-                    # Extract just the response text
-                    response_text = text[response_start_in_text:assistant_end_pos]
+                    # Extract response text INCLUDING <|im_end|> so model learns to stop
+                    response_text = text[response_start_in_text:assistant_end_pos + len(self.assistant_end_token)]
 
                     # Tokenize the response to find it in input_ids
                     response_tokens = self.processor.tokenizer.encode(
