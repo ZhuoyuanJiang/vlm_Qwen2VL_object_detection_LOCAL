@@ -232,7 +232,7 @@ async def send_request_async(
 async def run_benchmark_async(
     num_requests: int,
     concurrency: int,
-    image_b64: str,
+    image_b64_list: list[str],
 ) -> list[RequestResult]:
     """Run benchmark with specified concurrency level."""
     results = []
@@ -240,7 +240,8 @@ async def run_benchmark_async(
 
     async def bounded_request(request_id: int) -> RequestResult:
         async with semaphore:
-            return await send_request_async(session, request_id, image_b64)
+            # Each request gets its corresponding image from the list
+            return await send_request_async(session, request_id, image_b64_list[request_id])
 
     connector = aiohttp.TCPConnector(limit=concurrency)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -256,6 +257,7 @@ async def run_benchmark_async(
 def run_benchmark(
     num_requests: int = 10,
     concurrency: int = 1,
+    vary_images: bool = False,
     verbose: bool = True,
 ) -> dict:
     """
@@ -264,6 +266,8 @@ def run_benchmark(
     Args:
         num_requests: Total number of requests to send
         concurrency: Number of concurrent requests
+        vary_images: If True, use different images for each request (realistic scenario)
+                    If False, use same image for all requests (best-case prefix caching)
         verbose: Print progress and results
 
     Returns:
@@ -272,20 +276,36 @@ def run_benchmark(
     if verbose:
         print("=" * 60)
         print(f"vLLM Benchmark: {num_requests} requests @ concurrency={concurrency}")
+        print(f"  Image mode: {'DIFFERENT images (realistic)' if vary_images else 'SAME image (best-case caching)'}")
         print("=" * 60)
 
-    # Load test image
+    # Load test images
     if verbose:
-        print("\n1. Loading test image from HuggingFace dataset...")
+        print("\n1. Loading test images from HuggingFace dataset...")
     ds = load_dataset("openfoodfacts/nutrition-table-detection", split="val")
-    test_image = ds[0]['image']
-    test_image.save('/tmp/benchmark_test.jpg')
 
-    with open('/tmp/benchmark_test.jpg', 'rb') as f:
-        image_b64 = base64.b64encode(f.read()).decode()
-
-    if verbose:
-        print(f"   Image size: {test_image.size}")
+    if vary_images:
+        # Load different images for each request
+        num_unique_images = min(num_requests, len(ds))
+        images_b64 = []
+        for i in range(num_unique_images):
+            img = ds[i]['image']
+            img.save(f'/tmp/benchmark_test_{i}.jpg')
+            with open(f'/tmp/benchmark_test_{i}.jpg', 'rb') as f:
+                images_b64.append(base64.b64encode(f.read()).decode())
+        if verbose:
+            print(f"   Loaded {num_unique_images} different images")
+        # Cycle through images if num_requests > num_unique_images
+        image_b64_list = [images_b64[i % num_unique_images] for i in range(num_requests)]
+    else:
+        # Use same image for all requests
+        test_image = ds[0]['image']
+        test_image.save('/tmp/benchmark_test.jpg')
+        with open('/tmp/benchmark_test.jpg', 'rb') as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+        image_b64_list = [image_b64] * num_requests
+        if verbose:
+            print(f"   Using same image for all requests (size: {test_image.size})")
 
     # Get metrics before benchmark
     if verbose:
@@ -297,7 +317,7 @@ def run_benchmark(
         print(f"\n3. Running {num_requests} requests with concurrency={concurrency}...")
 
     start_time = time.perf_counter()
-    results = asyncio.run(run_benchmark_async(num_requests, concurrency, image_b64))
+    results = asyncio.run(run_benchmark_async(num_requests, concurrency, image_b64_list))
     total_time = time.perf_counter() - start_time
 
     # Get metrics after benchmark
@@ -323,6 +343,7 @@ def run_benchmark(
         "config": {
             "num_requests": num_requests,
             "concurrency": concurrency,
+            "vary_images": vary_images,
         },
         "summary": {
             "successful_requests": len(successful),
@@ -382,6 +403,9 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark vLLM serving performance")
     parser.add_argument("--num-requests", type=int, default=10, help="Number of requests to send")
     parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent requests")
+    parser.add_argument("--vary-images", action="store_true",
+                       help="Use different images for each request (realistic scenario). "
+                            "Default: use same image (best-case prefix caching)")
     parser.add_argument("--output", type=str, help="Output file for results (JSON)")
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
 
@@ -390,6 +414,7 @@ def main():
     results = run_benchmark(
         num_requests=args.num_requests,
         concurrency=args.concurrency,
+        vary_images=args.vary_images,
         verbose=not args.quiet,
     )
 
