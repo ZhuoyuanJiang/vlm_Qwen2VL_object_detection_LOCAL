@@ -5,8 +5,8 @@ This script benchmarks HuggingFace Transformers inference performance to compare
 Used to generate resume claims like: "Achieved Nx improvement with vLLM over HF Transformers"
 
 Metrics collected:
-- Throughput: images/second (equivalent to req/s in vLLM)
-- Latency: avg, min, max per request in ms
+- Throughput: images/second (equivalent to req/s in vLLM where 1 request = 1 image)
+- Latency: avg, min, max per image in ms (batch-averaged for batch_size > 1)
 
 Usage:
     python scripts/benchmark_hf_baseline.py --batch-size 1 --num-images 20
@@ -104,6 +104,8 @@ def run_single_inference(
 
     Returns:
         tuple: (output_text, latency_ms)
+
+    Note: Timer includes preprocessing to match E2E measurement in batch inference.
     """
     # Create conversation format
     messages = [
@@ -116,6 +118,10 @@ def run_single_inference(
             ],
         }
     ]
+
+    # Start timer BEFORE preprocessing (match E2E measurement)
+    torch.cuda.synchronize()
+    start_time = time.perf_counter()
 
     # Apply chat template
     text = processor.apply_chat_template(
@@ -136,21 +142,13 @@ def run_single_inference(
         return_tensors="pt",
     ).to(device)
 
-    # Timed generation
-    torch.cuda.synchronize()
-    start_time = time.perf_counter()
-
+    # Generate
     with torch.no_grad():
         generated_ids = model.generate(
             **inputs,
             max_new_tokens=64,
             do_sample=False,
         )
-
-    torch.cuda.synchronize()
-    end_time = time.perf_counter()
-
-    latency_ms = (end_time - start_time) * 1000
 
     # Decode output
     generated_ids_trimmed = [
@@ -163,6 +161,12 @@ def run_single_inference(
         clean_up_tokenization_spaces=False,
     )[0]
 
+    # End timer AFTER decode (complete E2E measurement)
+    torch.cuda.synchronize()
+    end_time = time.perf_counter()
+
+    latency_ms = (end_time - start_time) * 1000
+
     return output_text, latency_ms
 
 
@@ -173,23 +177,78 @@ def run_batch_inference(
     device: str = "cuda",
 ) -> BatchResult:
     """
-    Run inference on a batch of images.
+    Run TRUE batch inference on multiple images.
 
-    Note: Qwen2-VL doesn't support true batching with different images,
-    so we process sequentially and measure total time.
+    Processes all images in one forward pass, following the same pattern
+    as training collators (src/data/collators.py).
     """
-    outputs = []
-    total_latency_ms = 0
-
+    # Create conversations for all images
+    all_conversations = []
     for image in images:
-        output, latency_ms = run_single_inference(model, processor, image, device)
-        outputs.append(output)
-        total_latency_ms += latency_ms
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": USER_PROMPT},
+                ],
+            }
+        ]
+        all_conversations.append(messages)
+
+    # Start timer BEFORE preprocessing (match vLLM E2E measurement)
+    torch.cuda.synchronize()
+    start_time = time.perf_counter()
+
+    # Apply chat template to ALL conversations at once
+    text = processor.apply_chat_template(
+        all_conversations,  # List of conversations
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    # Process vision info (extracts images from conversations)
+    image_inputs, video_inputs = process_vision_info(all_conversations)
+
+    # Process all texts and images together (TRUE BATCHING)
+    inputs = processor(
+        text=text,  # List of texts
+        images=image_inputs,  # List of images
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    ).to(device)
+
+    # Generate for entire batch
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=64,
+            do_sample=False,
+        )
+
+    # Decode outputs
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):]
+        for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    outputs = processor.batch_decode(
+        generated_ids_trimmed,
+        skip_special_tokens=False,
+        clean_up_tokenization_spaces=False,
+    )
+
+    # End timer AFTER decode (complete E2E measurement)
+    torch.cuda.synchronize()
+    end_time = time.perf_counter()
+
+    batch_latency_ms = (end_time - start_time) * 1000
 
     return BatchResult(
         batch_size=len(images),
-        batch_latency_ms=total_latency_ms,
-        per_image_latency_ms=total_latency_ms / len(images),
+        batch_latency_ms=batch_latency_ms,
+        per_image_latency_ms=batch_latency_ms / len(images),
         outputs=outputs,
     )
 
@@ -207,7 +266,7 @@ def run_benchmark(
     Run HuggingFace Transformers benchmark.
 
     Args:
-        batch_size: Number of images per batch (processed sequentially for HF)
+        batch_size: Number of images per batch (true batching)
         num_images: Total number of images to process
         warmup_images: Number of warmup iterations
         verbose: Print progress
@@ -238,6 +297,28 @@ def run_benchmark(
     if verbose:
         print(f"   Image size: {test_image.size}")
 
+    # Verify true batching works (when batch_size > 1)
+    if verbose and batch_size > 1:
+        test_batch = [test_image] * min(2, batch_size)
+        messages_list = []
+        for img in test_batch:
+            messages_list.append([
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": [
+                    {"type": "image", "image": img},
+                    {"type": "text", "text": USER_PROMPT},
+                ]}
+            ])
+
+        text = processor.apply_chat_template(messages_list, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages_list)
+        inputs = processor(text=text, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+
+        print(f"\n[Batch Processing Verification]")
+        print(f"  input_ids.shape[0]: {inputs.input_ids.shape[0]} (batch size)")
+        print(f"  image_grid_thw.shape[0]: {inputs.image_grid_thw.shape[0]} (num images)")
+        print(f"  Expected: {len(test_batch)}")
+
     # Warmup
     if verbose:
         print(f"\n3. Running {warmup_images} warmup iterations...")
@@ -265,8 +346,7 @@ def run_benchmark(
         result = run_batch_inference(model, processor, batch_images)
         batch_results.append(result)
 
-        # Track individual latencies
-        # Since we process sequentially, estimate per-image latency
+        # Track per-image latencies (averaged from batch)
         for _ in batch_images:
             all_latencies.append(result.per_image_latency_ms)
 
@@ -293,12 +373,12 @@ def run_benchmark(
         summary={
             "total_time_s": total_time,
             "throughput_img_per_s": throughput,
-            "throughput_req_per_s": throughput,  # Same for single-image requests
+            # Note: Equivalent to vLLM req/s since each vLLM request processes 1 image
         },
         latency_stats={
-            "avg_ms": avg_latency,
-            "min_ms": min_latency,
-            "max_ms": max_latency,
+            "avg_ms_per_image_batch_averaged": avg_latency,
+            "min_ms_per_image_batch_averaged": min_latency,
+            "max_ms_per_image_batch_averaged": max_latency,
         },
         per_batch_results=[
             {
@@ -325,10 +405,12 @@ def run_benchmark(
         print(f"  Total time: {total_time:.2f}s")
         print(f"  Throughput: {throughput:.2f} img/s (req/s)")
 
-        print(f"\n[Latency]")
+        print(f"\n[Latency (per-image, batch-averaged)]")
         print(f"  Avg: {avg_latency:.1f} ms")
         print(f"  Min: {min_latency:.1f} ms")
         print(f"  Max: {max_latency:.1f} ms")
+        if batch_size > 1:
+            print(f"  Note: Min/max reflect batch variation, not per-request variance")
 
         print("\n" + "=" * 60)
 
@@ -349,7 +431,7 @@ def main():
     )
     parser.add_argument(
         "--batch-size", type=int, default=1,
-        help="Number of images per batch (processed sequentially)"
+        help="Number of images per batch (true batching)"
     )
     parser.add_argument(
         "--num-images", type=int, default=20,

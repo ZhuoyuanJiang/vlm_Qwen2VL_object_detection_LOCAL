@@ -495,85 +495,83 @@ vLLM Benchmark: 20 requests @ concurrency=8
 
 ## HuggingFace Transformers Baseline Comparison
 
-**Date**: 2026-01-05
+**Date**: 2026-01-05 (Updated 2026-01-07 with bug fix)
 **Benchmark Script**: `scripts/benchmark_hf_baseline.py`
 
-### HuggingFace Transformers Results
+### ⚠️ Bug Fix (2026-01-07)
 
-```
-============================================================
-HuggingFace Transformers Benchmark
-  Batch size: 1
-  Num images: 20
-  Warmup: 3
-============================================================
+The original HuggingFace benchmark had a critical bug: `run_batch_inference()` was calling `run_single_inference()` in a loop (serial processing), not true batching. This made it appear that batch_size had no effect. The bug was fixed to use proper batch processing like training collators.
 
-[Configuration]
-  Model: qwen2vl-nutrition-detection-r4-joint-merged
-  Batch size: 1
-  Images processed: 20
+### HuggingFace Transformers Results (CORRECTED)
 
-[Summary]
-  Total time: 30.30s
-  Throughput: 0.66 img/s (req/s)
+**Batch Size Effect Test:**
 
-[Latency]
-  Avg: 1188.8 ms
-  Min: 1182.5 ms
-  Max: 1206.7 ms
-============================================================
-```
+| batch_size | Per-image Latency | Throughput | vs batch=1 |
+|------------|-------------------|------------|------------|
+| 1 | 1520 ms | 0.66 img/s | baseline |
+| 4 | 995 ms | 1.01 img/s | **1.53x** |
+| 8 | 914 ms | 1.09 img/s | **1.65x** |
 
-### vLLM vs HuggingFace Transformers Comparison
+**Finding:** TRUE batching DOES help HuggingFace throughput by **1.65x** with batch_size=8!
 
-| Metric | HF Transformers | vLLM (c=1) | vLLM (c=8) | Improvement |
-|--------|-----------------|------------|------------|-------------|
-| **Throughput** | 0.66 req/s | 1.97 req/s | 11.34 req/s | **3x** (c=1), **17x** (c=8) |
-| **Latency** | 1189 ms | 492 ms | 541 ms | **2.4x faster** |
+### vLLM vs HuggingFace Transformers Comparison (CORRECTED)
 
-### Key Findings
+| Metric | HF (batch=1) | HF (batch=8) | vLLM (c=1, diff imgs) | vLLM (c=8, diff imgs) |
+|--------|--------------|--------------|----------------------|----------------------|
+| **Throughput** | 0.66 req/s | 1.09 req/s | 1.09 req/s | 3.17 req/s |
+| **E2E Latency** | 1520 ms | 914 ms | 907 ms | 2138 ms |
 
-1. **vLLM provides 3x throughput at single-request level** due to:
-   - Optimized CUDA kernels
-   - Continuous batching
-   - Prefix caching (99.3% hit rate)
+### Key Findings (CORRECTED)
 
-2. **vLLM provides 17x throughput at concurrency=8** due to:
-   - Continuous batching processes multiple requests simultaneously
-   - HuggingFace Transformers processes images sequentially (no parallel batching for VLMs)
+1. **HuggingFace with TRUE batching matches vLLM sequential (c=1)**:
+   - HF batch_size=8: 1.09 img/s
+   - vLLM c=1 (different images): 1.09 req/s
+   - **No throughput advantage at sequential level!**
 
-3. **Latency improvement: 2.4x faster** (492ms vs 1189ms)
-   - vLLM's optimized attention and caching reduce prefill time
+2. **vLLM's advantage comes from CONCURRENCY, not batching**:
+   - vLLM c=8: 3.17 req/s (**2.9x** vs HF batch=8)
+   - Continuous batching handles multiple concurrent requests efficiently
+   - HuggingFace cannot process concurrent requests (no HTTP server)
 
-### Why HuggingFace Can't Match vLLM Throughput
+3. **Latency is similar at sequential level**:
+   - HF batch=8: 914 ms/image
+   - vLLM c=1: 907 ms/request
 
-HuggingFace Transformers processes VLM images **sequentially** (one at a time), regardless of "batch_size" parameter. This is because:
-- Each image has different sizes/aspect ratios
-- Vision processing requires per-image attention
-- No native support for batching different images in VLMs
+### Why vLLM Provides Higher Throughput (CORRECTED)
 
-vLLM uses **continuous batching** which:
-- Processes multiple requests concurrently
-- Shares GPU resources efficiently
-- Scales throughput linearly with concurrency (up to GPU limits)
+The previous claim that "HuggingFace processes images sequentially" was partially incorrect:
+- **HuggingFace DOES support true batching** (uses same pattern as training collators)
+- With batch_size=8, HF throughput matches vLLM sequential
+
+**vLLM's real advantages:**
+1. **HTTP server** - handles concurrent requests from multiple users
+2. **Continuous batching** - processes requests as they arrive, not waiting for batch to fill
+3. **PagedAttention** - efficient KV cache sharing across requests
+4. **Prefix caching** - reuses computation for repeated prompts
+
+**For a single user processing images in batches, HuggingFace is equivalent to vLLM sequential.**
 
 ---
 
-## Resume Claims
+## Claims (resume-like, lol) (CORRECTED 2026-01-07)
 
-### Claim 1: Best-Case (Same Image, Prefix Caching)
+### Claim 1: vLLM Concurrent Request Handling
 
-> "Deployed fine-tuned Qwen2-VL model with vLLM serving, achieving **3x throughput** (1.97 vs 0.66 req/s) and **2.4x faster latency** (492ms vs 1189ms) compared to HuggingFace Transformers baseline. At concurrency=8, achieved **17x throughput** (11.4 req/s) through continuous batching and prefix caching."
+> "Deployed VLM with vLLM serving, achieving **2.9x throughput** (3.17 vs 1.09 req/s) over HuggingFace Transformers through continuous batching at concurrency=8."
 
-### Claim 2: Realistic Production (Different Images)
+### Claim 2: HuggingFace Static Batching Optimization
 
-> "Deployed fine-tuned Qwen2-VL model with vLLM serving. In realistic production scenarios with diverse images, achieved **1.6x throughput improvement** (1.09 vs 0.66 req/s) over HuggingFace Transformers at single-request level. With vLLM's continuous batching at concurrency=8, achieved **3.17 req/s** total throughput."
+> "Optimized HuggingFace VLM inference with true batching, achieving **1.65x throughput improvement** (1.09 vs 0.66 img/s) with batch_size=8."
 
-**Note on comparison**: HuggingFace Transformers processes VLMs sequentially (one image at a time). vLLM's "concurrency" means parallel HTTP requests handled via continuous batching - these are different paradigms.
+### Claim 3: Prefix Caching Impact (unchanged)
 
-### Claim 3: Prefix Caching Impact
+> "Demonstrated **15-17x TTFT improvement** (29ms vs 454ms) through vLLM's prefix caching for repeated image queries."
 
-> "Demonstrated **15-17x TTFT improvement** (29ms vs 454ms) through vLLM's prefix caching for repeated image queries, enabling sub-500ms response times for cached requests."
+### Combined Claim (resume-like lol)
+
+> "Benchmarked VLM inference strategies: HuggingFace static batching provides **1.65x throughput** improvement; vLLM continuous batching provides additional **2.9x improvement** through concurrent request handling. Total **4.8x throughput** vs sequential baseline (0.66 → 3.17 req/s)."
+
+**Note:** Previous claims overstated vLLM's advantage at sequential level. The real advantage comes from handling concurrent requests, not from faster single-image processing.
 
 ---
 
@@ -760,9 +758,12 @@ Per-request token usage: ~1,324 tokens (1,300 prompt + 24 generation)
 | Expected Throughput | 3-5 req/s | Realistic with diverse images |
 | Expected Latency | 2-3 seconds | At c=8-16 with different images |
 
-### Final Resume Claim
+### Final Resume Claim (CORRECTED 2026-01-07)
 
-> "Deployed fine-tuned Qwen2-VL model with vLLM, achieving **4.8x throughput** (3.17 vs 0.66 req/s) compared to HuggingFace Transformers at concurrency=8. Demonstrated **15-17x TTFT improvement** through vLLM's prefix caching for repeated queries."
+> "Deployed fine-tuned Qwen2-VL model with vLLM, achieving **2.9x throughput improvement** (3.17 vs 1.09 req/s) through continuous batching at concurrency=8. Demonstrated **1.65x additional improvement** from HuggingFace static batching (batch_size=8), and **15-17x TTFT reduction** through prefix caching for repeated queries."
+
+**Alternative (emphasizing total improvement from baseline):**
+> "Optimized VLM inference from 0.66 req/s (sequential HuggingFace) to 3.17 req/s (vLLM c=8): **4.8x total throughput improvement** through static batching (1.65x) and continuous batching (2.9x)."
 
 ---
 
