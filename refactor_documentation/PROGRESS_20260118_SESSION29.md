@@ -639,32 +639,118 @@ done
 | **GPTQ** | c=1024 | 41.29 req/s | 17525 ms | 2048/2048 (100%) |
 | **GPTQ** | c=2048 | 41.34 req/s | 32883 ms | 4096/4096 (100%) |
 
-### Key Findings: Maximum Concurrency
+### Key Findings: Maximum Concurrency (Warm-Cache)
 
 1. **BF16 Limit**: Starts failing at **c=512** (67% success rate) - limited by 80K token KV cache
 2. **GPTQ Limit**: Still **100% success at c=2048** - benefits from 250K token KV cache
 3. **GPTQ Peak Throughput**: 64.29 req/s at c=256 (vs BF16's 5.37 req/s at c=32)
 4. **GPTQ Advantage**: Can handle **4x+ higher concurrency** than BF16 before degradation
 
+**⚠️ Important**: These results are from warm-cache scenarios. See cold-cache results below for comparison.
+
+---
+
+### Experiment 9b: No-Prefix-Cache Maximum Concurrency (Re-run)
+
+To isolate KV cache capacity effects from prefix caching, we re-ran Experiment 9 with `--no-enable-prefix-caching`. Note: servers were started fresh before Batch 1, but NOT restarted between batches. This isolates prefix caching effects but is not a true "cold start" for each benchmark.
+
+**Server Configuration**:
+```bash
+# 6 parallel servers (3 BF16 on GPUs 0-2, 3 GPTQ on GPUs 3-5)
+# All with --no-enable-prefix-caching flag
+CUDA_VISIBLE_DEVICES=$GPU vllm serve $MODEL \
+  --no-enable-prefix-caching \
+  --gpu-memory-utilization 0.9 \
+  --port $PORT
+```
+
+**Benchmark Commands**:
+```bash
+PYTHON=/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving/bin/python
+OUT_DIR=/ssd1/zhuoyuan/vlm_outputs/quantization_experiments
+
+# Batch 1: c=16, 32, 64 (6 parallel)
+$PYTHON scripts/benchmark_vllm.py --num-requests 40 --concurrency 16 --vary-images --port 8000 --output $OUT_DIR/bf16_cold_c16.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 64 --concurrency 32 --vary-images --port 8001 --output $OUT_DIR/bf16_cold_c32.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 128 --concurrency 64 --vary-images --port 8002 --output $OUT_DIR/bf16_cold_c64.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 40 --concurrency 16 --vary-images --port 8003 --output $OUT_DIR/gptq_cold_c16.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 64 --concurrency 32 --vary-images --port 8004 --output $OUT_DIR/gptq_cold_c32.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 128 --concurrency 64 --vary-images --port 8005 --output $OUT_DIR/gptq_cold_c64.json &
+wait
+
+# Batch 2: c=128, 256, 512 (5 parallel)
+$PYTHON scripts/benchmark_vllm.py --num-requests 256 --concurrency 128 --vary-images --port 8000 --output $OUT_DIR/bf16_cold_c128.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 512 --concurrency 256 --vary-images --port 8001 --output $OUT_DIR/bf16_cold_c256.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 256 --concurrency 128 --vary-images --port 8003 --output $OUT_DIR/gptq_cold_c128.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 512 --concurrency 256 --vary-images --port 8004 --output $OUT_DIR/gptq_cold_c256.json &
+$PYTHON scripts/benchmark_vllm.py --num-requests 1024 --concurrency 512 --vary-images --port 8005 --output $OUT_DIR/gptq_cold_c512.json &
+wait
+```
+
+### Results: Maximum Concurrency (No Prefix Caching)
+
+| Model | Concurrency | Throughput | Avg E2E | Success Rate | Notes |
+|-------|-------------|------------|---------|--------------|-------|
+| BF16 | c=16 | 1.73 req/s | 7378 ms | 40/40 (100%) | |
+| BF16 | c=32 | 1.91 req/s | 14463 ms | 64/64 (100%) | |
+| BF16 | c=64 | 1.99 req/s | 27560 ms | 127/128 (99%) | |
+| BF16 | c=128 | 2.03 req/s | 52587 ms | 245/256 (96%) | |
+| BF16 | c=256 | 2.12 req/s | 25777 ms | 202/512 (39%) | ⚠️ Failure regime |
+| **GPTQ** | c=16 | 1.88 req/s | 6614 ms | 38/40 (95%) | Transient failures |
+| **GPTQ** | c=32 | 1.95 req/s | 14495 ms | 63/64 (98%) | |
+| **GPTQ** | c=64 | 1.96 req/s | 27973 ms | 128/128 (100%) | |
+| **GPTQ** | c=128 | 1.91 req/s | 54272 ms | 251/256 (98%) | |
+| **GPTQ** | c=256 | 2.12 req/s | 26057 ms | 221/512 (43%) | ⚠️ Failure regime |
+| **GPTQ** | c=512 | 4.23 req/s | 27100 ms | 228/1024 (22%) | ⚠️ Failure regime |
+
+**⚠️ Caveat on failure regimes**: At c=256+ success rates drop to 22-43%. Throughput is calculated as `num_requests / total_time` (total attempted, not successful), which inflates the metric when failures occur. For actual successful completion rate, use `successful_requests / total_time`. E2E latency averages exclude failed requests, skewing metrics (direction depends on failure behavior—timeouts bias latency downward). Results at c=256+ are not reliable for comparison.
+
+### Key Findings: Warm-Cache vs No-Prefix-Cache Comparison
+
+| Metric | Warm (Prefix Cache) | No Prefix Cache | Interpretation |
+|--------|---------------------|-----------------|----------------|
+| **GPTQ c=128 throughput** | 63.43 req/s | 1.91 req/s | **33x difference** |
+| **GPTQ c=256 throughput** | 64.29 req/s | 2.12 req/s | **30x difference** |
+| **GPTQ vs BF16 ratio (c=128)** | 26x faster | ~same | Prefix caching unlocks GPTQ advantage |
+| **BF16 c=256 success** | 100% | 39% | Both fail similarly without caching |
+| **GPTQ c=256 success** | 100% | 43% | Both fail similarly without caching |
+
+### Critical Insight
+
+**The dramatic GPTQ advantage in warm-cache Experiment 9 (64 req/s vs 5 req/s) was primarily due to prefix caching, NOT raw KV cache capacity.**
+
+Without prefix caching:
+- Both models achieve similar throughput (~1.9-2.1 req/s) for c=16-128
+- Both models start failing at similar concurrency levels (c=256+)
+- The system is **prefill-bound**, not decode-bound
+- GPTQ's larger KV cache provides minimal advantage when prefix caching is disabled
+
+This makes sense because:
+1. Without prefix caching, every request must fully compute the prefill (vision encoding)
+2. Prefill is the same speed for both models (vision encoder not quantized)
+3. GPTQ's faster decode and larger KV cache don't help when prefill dominates
+
+**Note on transient failures at low concurrency**: GPTQ had 38/40 (95%) success at c=16 but 63/64 (98%) at c=32. This counterintuitive pattern (higher concurrency, better success) indicates these are random transient failures (possibly server warm-up or timing), not load-related. BF16 achieved 100% at both c=16 and c=32.
+
 ### Concurrency vs Throughput Chart (Mental Model)
 
 ```
 Throughput (req/s)
     |
- 64 |                          *GPTQ c=256*
-    |                       *GPTQ c=128*
- 50 |                                  *GPTQ c=512*
- 41 |                                          *GPTQ c=1024-2048*
- 26 |     *GPTQ c=8*
+ 64 |                          *GPTQ c=256 warm*
+    |                       *GPTQ c=128 warm*
+ 50 |                                  *GPTQ c=512 warm*
+ 41 |                                          *GPTQ c=1024-2048 warm*
     |
- 12 | *BF16 c=8*
-  7 | *BF16 c=4*
-  5 |            *BF16 c=32* -------- *BF16 c=512 (67% success)*
-  3 |
-  1 |*c=1*
+  5 |            *BF16 c=32 warm* -------- *BF16 c=512 warm (67%)*
+    |
+  2 |  *BF16/GPTQ no-cache* ~~~~~~ nearly identical ~~~~~~~~
+    |
     +------------------------------------------------
        1    8   32  64  128  256  512  1024  2048
                    Concurrency
+
+Legend: warm = prefix caching enabled, no-cache = --no-enable-prefix-caching
 ```
 
 ---
@@ -682,8 +768,9 @@ Throughput (req/s)
 | **Throughput (c=1, no cache)** | 0.86 req/s | 1.15 req/s | +34% |
 | **Throughput (c=8, no cache)** | 1.74 req/s | 1.75 req/s | ~same |
 | **Throughput (c=8, prefix cache)** | 11.78 req/s | 25.54 req/s | **2.2x** |
-| **Peak Throughput** | 5.37 req/s (c=32) | 64.29 req/s (c=256) | **12x** |
-| **Max Concurrency (100% success)** | c=256 | c=2048+ | **8x+ more** |
+| **Peak Throughput** ⚠️ | 5.37 req/s (c=32) | 64.29 req/s (c=256) | **12x** (warm-cache) |
+| **Max Concurrency (100% success)** ⚠️ | c=256 | c=2048+ | **8x+ more** (warm-cache) |
+| **Throughput (c=128, no cache)** | 2.03 req/s | 1.91 req/s | ~same |
 | **E2E Latency (c=1)** | 1118 ms | 819 ms | **-27%** |
 | **TPOT (c=1)** | 20.3 ms | 7.4 ms | **-64%** |
 
@@ -691,9 +778,9 @@ Throughput (req/s)
 
 ## Updated Recommendations
 
-1. **Always use GPTQ INT4 for production** - negligible accuracy loss with massive throughput gains
-2. **Enable prefix caching** - provides 5-15x throughput improvement for repeated prompts
-3. **High concurrency workloads** - GPTQ can handle 8x more concurrent requests
+1. **Always use GPTQ INT4 for production** - negligible accuracy loss with meaningful throughput gains
+2. **Enable prefix caching** - provides 5-15x throughput improvement for repeated prompts (warm-cache best-case; novel workloads see smaller gains)
+3. **High concurrency workloads (with prefix caching)** - GPTQ can handle 8x more concurrent requests; without prefix caching, BF16 and GPTQ perform similarly up to c=128
 4. **Latency-sensitive applications** - GPTQ provides 27% lower E2E latency and 64% faster decode
 5. **Memory-constrained deployments** - GPTQ uses 2.4x less model memory, leaving more for KV cache
 
@@ -715,7 +802,11 @@ All results are saved to `/ssd1/zhuoyuan/vlm_outputs/quantization_experiments/`:
 | `gptq_clean_c8.json` | GPTQ benchmark, c=8, no prefix cache |
 | `bf16_prefix_c*.json` | BF16 benchmarks with prefix caching |
 | `gptq_prefix_c*.json` | GPTQ benchmarks with prefix caching |
+| `bf16_cold_c*.json` | BF16 benchmarks, no prefix caching (Exp 9b) |
+| `gptq_cold_c*.json` | GPTQ benchmarks, no prefix caching (Exp 9b) |
 | `validation_slice_metadata.json` | Deterministic validation slice info |
+
+**Note on filenames**: Files named `*_cold_*` are "no-prefix-cache" runs (`--no-enable-prefix-caching`), not true cold-start benchmarks. The naming predates the terminology refinement.
 
 ---
 
@@ -733,7 +824,8 @@ This section addresses reviewer feedback and provides proper framing for interpr
 | **Exp 6: Clean Benchmarks** | No-cache baseline | ✅ Reliable | Fresh servers, `--no-enable-prefix-caching` |
 | **Exp 7: VRAM Breakdown** | Memory allocation | ✅ Reliable | Server logs, not affected by caching |
 | **Exp 8: Prefix Caching** | Best-case cache performance | ⚠️ Use with caveats | Warm-cache scenario with repeated image set. Warm-cache best-case; not valid for "novel images" claims. |
-| **Exp 9: Max Concurrency** | Scaling limits | ⚠️ Use with caveats | Warm-cache + KV capacity effects combined. Needs re-run with cold-cache design for clean scaling measurement. |
+| **Exp 9: Max Concurrency (warm)** | Scaling limits | ⚠️ Warm-cache best-case | Prefix caching enabled; shows dramatic GPTQ advantage |
+| **Exp 9b: Max Concurrency (no-cache)** | Scaling limits | ✅ Reliable (c≤128) | `--no-enable-prefix-caching`; shows BF16≈GPTQ. Results at c=256+ are failure regimes (22-43% success) and not reliable. |
 
 ### A.2 Caveats and Limitations
 
@@ -746,9 +838,11 @@ Some benchmarks in Experiment 6 had failures (likely timeouts):
 - GPTQ c=4: 17/20 (85% success)
 - GPTQ c=8: 17/20 (85% success)
 
-These failures may bias throughput/latency metrics upward (failed requests excluded from averages). This should be considered when comparing configurations.
+These failures skew throughput/latency metrics. This should be considered when comparing configurations.
 
-**Important nuance**: Latency metrics (TTFT, TPOT, E2E) exclude failed requests from their averages, while throughput is calculated using total requests (successful/total_time). This means latency metrics may appear better than reality when success rate is low, while throughput reflects the true effective rate including failures.
+**Important nuance**: Latency metrics (TTFT, TPOT, E2E) exclude failed requests from their averages, while throughput is calculated as `num_requests / total_time` (total attempted, not successful). This means:
+- Latency may appear better when slow requests timeout and get excluded
+- Throughput is inflated because failed requests count toward the numerator
 
 #### Prefix Caching with `--vary-images`
 The `--vary-images` flag uses a **deterministic slice** (first N images from the HuggingFace dataset). Within a single benchmark run, images are different. However, across repeated benchmark runs, the **same images are reused**, enabling massive cache hits.
@@ -810,7 +904,7 @@ Based on the reliable experiments (primarily Experiment 6), here are the defensi
 | 3.1× KV cache capacity increase | **High** | Server logs |
 | TTFT similar (~650ms), TPOT -64% (20→7ms) | **High** | Exp 6, c=1 |
 | 34% throughput gain at c=1 | **High** | Exp 6, c=1 |
-| GPTQ scales better at high concurrency | **Medium** | Direction reliable, magnitude may vary |
+| GPTQ scales better at high concurrency (warm-cache only) | **Medium** | Warm-cache: direction reliable, magnitude amplified. No-prefix-cache: parity up to c=128. |
 | Prefix caching gives 5-15× gains | **Low-Medium** | Best-case only, warm-cache scenario |
 
 ### A.5 Recommended Framing for Reports
