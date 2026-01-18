@@ -28,6 +28,14 @@ import aiohttp
 import requests
 from datasets import load_dataset
 
+# VRAM monitoring
+try:
+    import pynvml
+    PYNVML_AVAILABLE = True
+except ImportError:
+    PYNVML_AVAILABLE = False
+    print("Warning: pynvml not installed. VRAM monitoring disabled.")
+
 # Handle nested event loops (for Jupyter notebooks)
 # Jupyter already runs an event loop, so asyncio.run() fails without this patch
 try:
@@ -41,7 +49,7 @@ except ImportError:
 # Configuration
 # =============================================================================
 VLLM_HOST = "localhost"
-VLLM_PORT = 8000
+VLLM_PORT = 8000  # Default, can be overridden via --port
 MODEL_NAME = "qwen2vl-nutrition"
 
 SYSTEM_PROMPT = """You are a nutrition label detector. Your task is to identify nutrition tables/panels in food product images.
@@ -89,6 +97,55 @@ class MetricsSnapshot:
     requests_running: int
     requests_waiting: int
     kv_cache_usage: float
+
+
+@dataclass
+class MemoryProfile:
+    """GPU memory profile at different stages."""
+    post_load_mb: float      # After model loads, before any inference
+    post_warmup_mb: float    # After warmup requests complete
+    peak_mb: float           # Maximum during benchmark run
+    kv_cache_usage_pct: float  # From vLLM /metrics
+
+
+# =============================================================================
+# Memory Monitoring
+# =============================================================================
+def get_gpu_memory_mb(device_index: int = 0) -> float:
+    """Get current GPU memory usage in MB using pynvml."""
+    if not PYNVML_AVAILABLE:
+        return 0.0
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return info.used / (1024 ** 2)  # Convert to MB
+    except Exception as e:
+        print(f"Warning: Could not get GPU memory: {e}")
+        return 0.0
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except:
+            pass
+
+
+def get_gpu_memory_total_mb(device_index: int = 0) -> float:
+    """Get total GPU memory in MB."""
+    if not PYNVML_AVAILABLE:
+        return 0.0
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return info.total / (1024 ** 2)
+    except:
+        return 0.0
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except:
+            pass
 
 
 # =============================================================================
@@ -307,10 +364,17 @@ def run_benchmark(
         if verbose:
             print(f"   Using same image for all requests (size: {test_image.size})")
 
-    # Get metrics before benchmark
+    # Capture initial memory (post-load, before any requests from this benchmark)
     if verbose:
-        print("\n2. Capturing baseline metrics...")
+        print("\n2. Capturing initial VRAM and metrics...")
+    initial_memory_mb = get_gpu_memory_mb()
     metrics_before = get_metrics_snapshot()
+
+    if verbose:
+        print(f"   Initial VRAM usage: {initial_memory_mb:.0f} MB ({initial_memory_mb/1024:.2f} GB)")
+
+    # Track peak memory during benchmark
+    peak_memory_mb = initial_memory_mb
 
     # Run benchmark
     if verbose:
@@ -320,10 +384,20 @@ def run_benchmark(
     results = asyncio.run(run_benchmark_async(num_requests, concurrency, image_b64_list))
     total_time = time.perf_counter() - start_time
 
+    # Capture memory after benchmark (this is likely the peak)
+    post_benchmark_memory_mb = get_gpu_memory_mb()
+    peak_memory_mb = max(peak_memory_mb, post_benchmark_memory_mb)
+
     # Get metrics after benchmark
     if verbose:
-        print("\n4. Capturing final metrics...")
+        print("\n4. Capturing final metrics and VRAM...")
     metrics_after = get_metrics_snapshot()
+    final_memory_mb = get_gpu_memory_mb()
+
+    if verbose:
+        print(f"   Final VRAM usage: {final_memory_mb:.0f} MB ({final_memory_mb/1024:.2f} GB)")
+        print(f"   Peak VRAM usage: {peak_memory_mb:.0f} MB ({peak_memory_mb/1024:.2f} GB)")
+        print(f"   KV Cache usage: {metrics_after.kv_cache_usage:.1%}")
 
     # Compute results
     successful = [r for r in results if r.success]
@@ -337,6 +411,17 @@ def run_benchmark(
 
     # Compute throughput
     throughput = num_requests / total_time if total_time > 0 else 0
+
+    # Build memory profile
+    memory_profile = {
+        "initial_mb": initial_memory_mb,
+        "initial_gb": initial_memory_mb / 1024,
+        "peak_mb": peak_memory_mb,
+        "peak_gb": peak_memory_mb / 1024,
+        "final_mb": final_memory_mb,
+        "final_gb": final_memory_mb / 1024,
+        "kv_cache_usage_pct": metrics_after.kv_cache_usage,
+    }
 
     # Build results dictionary
     benchmark_results = {
@@ -357,6 +442,7 @@ def run_benchmark(
             "max_latency_ms": max(client_latencies) if client_latencies else 0,
         },
         "server_metrics": server_metrics,
+        "memory_profile": memory_profile,
     }
 
     # Print results
@@ -391,6 +477,12 @@ def run_benchmark(
         else:
             print(f"  Error: {server_metrics['error']}")
 
+        print(f"\n[VRAM Usage]")
+        print(f"  Initial: {memory_profile['initial_gb']:.2f} GB")
+        print(f"  Peak:    {memory_profile['peak_gb']:.2f} GB")
+        print(f"  Final:   {memory_profile['final_gb']:.2f} GB")
+        print(f"  KV Cache: {memory_profile['kv_cache_usage_pct']:.1%}")
+
         print("\n" + "=" * 60)
 
     return benchmark_results
@@ -408,8 +500,13 @@ def main():
                             "Default: use same image (best-case prefix caching)")
     parser.add_argument("--output", type=str, help="Output file for results (JSON)")
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
+    parser.add_argument("--port", type=int, default=8000, help="vLLM server port (default: 8000)")
 
     args = parser.parse_args()
+
+    # Override global port if specified
+    global VLLM_PORT
+    VLLM_PORT = args.port
 
     results = run_benchmark(
         num_requests=args.num_requests,
