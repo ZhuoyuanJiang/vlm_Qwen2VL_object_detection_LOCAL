@@ -1,0 +1,38 @@
+{
+  "config": {
+    "num_requests": 20,
+    "concurrency": 8,
+    "vary_images": true
+  },
+  "summary": {
+    "successful_requests": 20,
+    "failed_requests": 0,
+    "total_time_s": 1.6972475610673428,
+    "throughput_rps": 11.783784792963651
+  },
+  "client_metrics": {
+    "avg_latency_ms": 577.1962199360132,
+    "min_latency_ms": 507.09231570363045,
+    "max_latency_ms": 637.6225985586643
+  },
+  "server_metrics": {
+    "num_requests": 20,
+    "avg_ttft_ms": 52.4843692779541,
+    "avg_tpot_ms": 21.67860982452202,
+    "avg_e2e_ms": 545.2152252197266,
+    "avg_prefill_ms": 28.784296289086342,
+    "avg_decode_ms": 493.1683998554945,
+    "avg_itl_ms": 21.67773186177998,
+    "total_prompt_tokens": 26258,
+    "total_generation_tokens": 475
+  },
+  "memory_profile": {
+    "initial_mb": 23211.0,
+    "initial_gb": 22.6669921875,
+    "peak_mb": 23211.0,
+    "peak_gb": 22.6669921875,
+    "final_mb": 23211.0,
+    "final_gb": 22.6669921875,
+    "kv_cache_usage_pct": 0.0
+  }
+}

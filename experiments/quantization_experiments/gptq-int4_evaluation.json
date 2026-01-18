@@ -1,0 +1,2031 @@
+{
+  "model_type": "gptq-int4",
+  "num_samples": 100,
+  "timestamp": "2026-01-18 05:41:50",
+  "metrics": {
+    "mean_iou": 0.8395090858265758,
+    "median_iou": 0.9397310614585876,
+    "max_iou": 1.0,
+    "min_iou": 0.0,
+    "detection_rate": 1.0,
+    "iou_threshold_0.5": 0.91,
+    "iou_threshold_0.7": 0.86,
+    "avg_latency_ms": 618.3635764941573,
+    "min_latency_ms": 180.28073757886887,
+    "max_latency_ms": 855.9935688972473
+  },
+  "drift_metrics": {
+    "mean_iou_drift": -0.006283333338797092,
+    "median_iou_drift": -0.0002713501453399658,
+    "max_iou_improvement": 0.07068830728530884,
+    "max_iou_degradation": -0.19999992847442627,
+    "exact_match_rate": 0.15,
+    "output_match_rate": 0.15,
+    "baseline_mean_iou": 0.8457924191653728,
+    "current_mean_iou": 0.8395090858265758,
+    "iou_change_absolute": -0.006283333338797048,
+    "iou_change_relative_pct": -0.742893078303709
+  },
+  "samples": [
+    {
+      "sample_idx": 0,
+      "ground_truth_bbox": [
+        0.4871672987937927,
+        0.27339744567871094,
+        0.6409340500831604,
+        0.7304487228393555
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(271,494),(733,623)<|box_end|>",
+      "parsed_bbox": [
+        271,
+        494,
+        733,
+        623
+      ],
+      "iou": 0.8313814401626587,
+      "latency_ms": 222.6649709045887,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 1,
+      "ground_truth_bbox": [
+        0.24662990868091583,
+        0.26552286744117737,
+        0.4532569646835327,
+        0.7825552225112915
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(266,248),(780,418)<|box_end|>",
+      "parsed_bbox": [
+        266,
+        248,
+        780,
+        418
+      ],
+      "iou": 0.8179129362106323,
+      "latency_ms": 204.3205313384533,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 2,
+      "ground_truth_bbox": [
+        0.10315078496932983,
+        0.04094965010881424,
+        0.5143317580223083,
+        0.9385930299758911
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(39,100),(933,519)<|box_end|>",
+      "parsed_bbox": [
+        39,
+        100,
+        933,
+        519
+      ],
+      "iou": 0.9732236862182617,
+      "latency_ms": 190.2044452726841,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 3,
+      "ground_truth_bbox": [
+        0.3143387734889984,
+        0.16432449221611023,
+        0.8336485028266907,
+        0.5847028493881226
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(166,319),(557,830)<|box_end|>",
+      "parsed_bbox": [
+        166,
+        319,
+        557,
+        830
+      ],
+      "iou": 0.9152311086654663,
+      "latency_ms": 194.6350522339344,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 4,
+      "ground_truth_bbox": [
+        0.3629959225654602,
+        0.3499999940395355,
+        0.6154987215995789,
+        0.559499979019165
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(349,366),(560,619)<|box_end|>",
+      "parsed_bbox": [
+        349,
+        366,
+        560,
+        619
+      ],
+      "iou": 0.9677411317825317,
+      "latency_ms": 199.43607226014137,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 5,
+      "ground_truth_bbox": [
+        0.14399999380111694,
+        0.31886398792266846,
+        0.8074771165847778,
+        0.7026360034942627
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(316,130),(700,678)<|box_end|>",
+      "parsed_bbox": [
+        316,
+        130,
+        700,
+        678
+      ],
+      "iou": 0.7782171964645386,
+      "latency_ms": 197.24468514323235,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 6,
+      "ground_truth_bbox": [
+        0.0,
+        0.004179104696959257,
+        1.0,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(0,0),(1000,1000)<|box_end|>",
+      "parsed_bbox": [
+        0,
+        0,
+        1000,
+        1000
+      ],
+      "iou": 0.9958208799362183,
+      "latency_ms": 180.28073757886887,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 7,
+      "ground_truth_bbox": [
+        0.44200000166893005,
+        0.2275555580854416,
+        0.7934580445289612,
+        0.8545454740524292
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(222,453),(848,753)<|box_end|>",
+      "parsed_bbox": [
+        222,
+        453,
+        848,
+        753
+      ],
+      "iou": 0.8383352756500244,
+      "latency_ms": 195.9739476442337,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 8,
+      "ground_truth_bbox": [
+        0.013333333656191826,
+        0.013641132973134518,
+        0.6200000047683716,
+        0.9569779634475708
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,10),(960,623)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        10,
+        960,
+        623
+      ],
+      "iou": 0.9827268719673157,
+      "latency_ms": 185.1080022752285,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 9,
+      "ground_truth_bbox": [
+        0.2606924772262573,
+        0.04060913622379303,
+        0.9775967597961426,
+        0.5697969794273376
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(41,264),(566,978)<|box_end|>",
+      "parsed_bbox": [
+        41,
+        264,
+        566,
+        978
+      ],
+      "iou": 0.9869583249092102,
+      "latency_ms": 189.91795554757118,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 10,
+      "ground_truth_bbox": [
+        0.29858630895614624,
+        0.26605692505836487,
+        0.828700840473175,
+        0.7013829350471497
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(261,296),(699,826)<|box_end|>",
+      "parsed_bbox": [
+        261,
+        296,
+        699,
+        826
+      ],
+      "iou": 0.9734306335449219,
+      "latency_ms": 204.4212967157364,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 11,
+      "ground_truth_bbox": [
+        0.0,
+        0.0,
+        0.9999014139175415,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,0),(1000,1000)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        0,
+        1000,
+        1000
+      ],
+      "iou": 0.989903450012207,
+      "latency_ms": 192.10069999098778,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 12,
+      "ground_truth_bbox": [
+        0.09556451439857483,
+        0.5580645203590393,
+        0.8540322780609131,
+        0.6822580695152283
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(561,101),(684,851)<|box_end|>",
+      "parsed_bbox": [
+        561,
+        101,
+        684,
+        851
+      ],
+      "iou": 0.9522561430931091,
+      "latency_ms": 208.22959393262863,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 13,
+      "ground_truth_bbox": [
+        0.38945814967155457,
+        0.12035106122493744,
+        0.920936107635498,
+        0.5695050358772278
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(109,390),(570,924)<|box_end|>",
+      "parsed_bbox": [
+        109,
+        390,
+        570,
+        924
+      ],
+      "iou": 0.9677566289901733,
+      "latency_ms": 201.645378023386,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 14,
+      "ground_truth_bbox": [
+        0.5320000052452087,
+        0.8619999885559082,
+        0.653333306312561,
+        0.9035000205039978
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-small<|object_ref_end|><|box_start|>(831,641),(894,682)<|box_end|>",
+      "parsed_bbox": [
+        831,
+        641,
+        894,
+        682
+      ],
+      "iou": 0.05463520810008049,
+      "latency_ms": 202.41215452551842,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 15,
+      "ground_truth_bbox": [
+        0.46631360054016113,
+        0.16328157484531403,
+        0.8867363929748535,
+        0.5844765901565552
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(162,478),(581,885)<|box_end|>",
+      "parsed_bbox": [
+        162,
+        478,
+        581,
+        885
+      ],
+      "iou": 0.9572629332542419,
+      "latency_ms": 200.81354677677155,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 16,
+      "ground_truth_bbox": [
+        0.24183006584644318,
+        0.00413223123177886,
+        0.6684964895248413,
+        0.9433210492134094
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,234),(941,662)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        234,
+        941,
+        662
+      ],
+      "iou": 0.9587463140487671,
+      "latency_ms": 192.60049611330032,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 17,
+      "ground_truth_bbox": [
+        0.7250000238418579,
+        0.2754901945590973,
+        0.8102940917015076,
+        0.9519608020782471
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(268,723),(959,858)<|box_end|>",
+      "parsed_bbox": [
+        268,
+        723,
+        959,
+        858
+      ],
+      "iou": 0.6185231804847717,
+      "latency_ms": 202.21267268061638,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 18,
+      "ground_truth_bbox": [
+        0.13878469169139862,
+        0.17900000512599945,
+        0.6204050779342651,
+        0.6520000100135803
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(173,142),(648,623)<|box_end|>",
+      "parsed_bbox": [
+        173,
+        142,
+        648,
+        623
+      ],
+      "iou": 0.9674980640411377,
+      "latency_ms": 199.34898242354393,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 19,
+      "ground_truth_bbox": [
+        0.2250562608242035,
+        0.2705000042915344,
+        0.5592648386955261,
+        0.5724999904632568
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(266,224),(574,563)<|box_end|>",
+      "parsed_bbox": [
+        266,
+        224,
+        574,
+        563
+      ],
+      "iou": 0.9666607975959778,
+      "latency_ms": 197.10608944296837,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 20,
+      "ground_truth_bbox": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(0,0),(1000,800)<|box_end|>",
+      "parsed_bbox": [
+        0,
+        0,
+        1000,
+        800
+      ],
+      "iou": 0.8000000715255737,
+      "latency_ms": 424.710251390934,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 21,
+      "ground_truth_bbox": [
+        0.5258487462997437,
+        0.17219632863998413,
+        0.9063465595245361,
+        0.4806462228298187
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(166,530),(480,903)<|box_end|>",
+      "parsed_bbox": [
+        166,
+        530,
+        480,
+        903
+      ],
+      "iou": 0.9593486785888672,
+      "latency_ms": 738.0219474434853,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 22,
+      "ground_truth_bbox": [
+        0.7760900259017944,
+        0.11100000143051147,
+        0.8101266026496887,
+        0.15700000524520874
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(104,772),(154,809)<|box_end|>",
+      "parsed_bbox": [
+        104,
+        772,
+        154,
+        809
+      ],
+      "iou": 0.7073691487312317,
+      "latency_ms": 740.4460869729519,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 23,
+      "ground_truth_bbox": [
+        0.0,
+        0.01923076994717121,
+        0.7484999895095825,
+        0.9884615540504456
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,10),(980,748)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        10,
+        980,
+        748
+      ],
+      "iou": 0.9682720899581909,
+      "latency_ms": 699.6267065405846,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 24,
+      "ground_truth_bbox": [
+        0.04528439790010452,
+        0.010638297535479069,
+        0.949276864528656,
+        0.9953815937042236
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,46),(977,940)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        46,
+        977,
+        940
+      ],
+      "iou": 0.969864547252655,
+      "latency_ms": 716.1094211041927,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 25,
+      "ground_truth_bbox": [
+        0.09071678668260574,
+        0.035555556416511536,
+        0.6459755301475525,
+        0.874666690826416
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(41,98),(881,533)<|box_end|>",
+      "parsed_bbox": [
+        41,
+        98,
+        881,
+        533
+      ],
+      "iou": 0.773760199546814,
+      "latency_ms": 679.5031428337097,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 26,
+      "ground_truth_bbox": [
+        0.41140130162239075,
+        0.08299999684095383,
+        0.4372367262840271,
+        0.5504999756813049
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(883,348),(1000,448)<|box_end|>",
+      "parsed_bbox": [
+        883,
+        348,
+        1000,
+        448
+      ],
+      "iou": 0.0,
+      "latency_ms": 746.5348839759827,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 27,
+      "ground_truth_bbox": [
+        0.4035947620868683,
+        0.15716911852359772,
+        0.5028594732284546,
+        0.8403798937797546
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(159,424),(843,499)<|box_end|>",
+      "parsed_bbox": [
+        159,
+        424,
+        843,
+        499
+      ],
+      "iou": 0.7513538599014282,
+      "latency_ms": 734.5405295491219,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 28,
+      "ground_truth_bbox": [
+        0.07842205464839935,
+        0.26057693362236023,
+        0.5247148275375366,
+        0.6942307949066162
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(262,83),(698,529)<|box_end|>",
+      "parsed_bbox": [
+        262,
+        83,
+        698,
+        529
+      ],
+      "iou": 0.9688076972961426,
+      "latency_ms": 819.8758997023106,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 29,
+      "ground_truth_bbox": [
+        0.5185453295707703,
+        0.2475000023841858,
+        0.8144303560256958,
+        0.7538642883300781
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(244,533),(753,819)<|box_end|>",
+      "parsed_bbox": [
+        244,
+        533,
+        753,
+        819
+      ],
+      "iou": 0.9289947748184204,
+      "latency_ms": 709.0528793632984,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 30,
+      "ground_truth_bbox": [
+        0.45500001311302185,
+        0.03333333507180214,
+        0.7839999794960022,
+        0.7680000066757202
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(31,460),(769,786)<|box_end|>",
+      "parsed_bbox": [
+        31,
+        460,
+        769,
+        786
+      ],
+      "iou": 0.9744970798492432,
+      "latency_ms": 686.3772347569466,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 31,
+      "ground_truth_bbox": [
+        0.30067017674446106,
+        0.2668306231498718,
+        0.6809813380241394,
+        0.5646584630012512
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(266,303),(564,680)<|box_end|>",
+      "parsed_bbox": [
+        266,
+        303,
+        564,
+        680
+      ],
+      "iou": 0.9863750338554382,
+      "latency_ms": 730.6986674666405,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 32,
+      "ground_truth_bbox": [
+        0.01549999974668026,
+        0.3271111249923706,
+        0.42129722237586975,
+        0.8428096771240234
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(321,14),(838,420)<|box_end|>",
+      "parsed_bbox": [
+        321,
+        14,
+        838,
+        420
+      ],
+      "iou": 0.9724165201187134,
+      "latency_ms": 689.2111226916313,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 33,
+      "ground_truth_bbox": [
+        0.2523888945579529,
+        0.22534170746803284,
+        0.7603698968887329,
+        0.7976398468017578
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(254,207),(743,773)<|box_end|>",
+      "parsed_bbox": [
+        254,
+        207,
+        743,
+        773
+      ],
+      "iou": 0.7784773111343384,
+      "latency_ms": 723.771370947361,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 34,
+      "ground_truth_bbox": [
+        0.3015168607234955,
+        0.41604506969451904,
+        0.730426013469696,
+        0.8717617392539978
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(98,303),(874,753)<|box_end|>",
+      "parsed_bbox": [
+        98,
+        303,
+        874,
+        753
+      ],
+      "iou": 0.5567265152931213,
+      "latency_ms": 719.2732058465481,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 35,
+      "ground_truth_bbox": [
+        0.05151815712451935,
+        0.1816302090883255,
+        0.493232786655426,
+        0.7731568813323975
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(57,230),(483,814)<|box_end|>",
+      "parsed_bbox": [
+        57,
+        230,
+        483,
+        814
+      ],
+      "iou": 0.18417252600193024,
+      "latency_ms": 727.4122051894665,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 36,
+      "ground_truth_bbox": [
+        0.12224264442920685,
+        0.22811885178089142,
+        0.7647966742515564,
+        0.7385438084602356
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(234,124),(738,762)<|box_end|>",
+      "parsed_bbox": [
+        234,
+        124,
+        738,
+        762
+      ],
+      "iou": 0.9804142117500305,
+      "latency_ms": 769.0570913255215,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 37,
+      "ground_truth_bbox": [
+        0.729903519153595,
+        0.18820860981941223,
+        0.8062701225280762,
+        0.7962422966957092
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(168,746),(503,806)<|box_end|>",
+      "parsed_bbox": [
+        168,
+        746,
+        503,
+        806
+      ],
+      "iou": 0.39641299843788147,
+      "latency_ms": 772.1015736460686,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 38,
+      "ground_truth_bbox": [
+        0.24952471256256104,
+        0.24551281332969666,
+        0.6686172485351562,
+        0.5339743494987488
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(231,240),(534,673)<|box_end|>",
+      "parsed_bbox": [
+        231,
+        240,
+        534,
+        673
+      ],
+      "iou": 0.9214407205581665,
+      "latency_ms": 844.7385616600513,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 39,
+      "ground_truth_bbox": [
+        0.48591768741607666,
+        0.3756026327610016,
+        0.6485020518302917,
+        0.7986351251602173
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(639,490),(800,646)<|box_end|>",
+      "parsed_bbox": [
+        639,
+        490,
+        800,
+        646
+      ],
+      "iou": 0.3609592616558075,
+      "latency_ms": 670.6510968506336,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 40,
+      "ground_truth_bbox": [
+        0.31554079055786133,
+        0.3503975570201874,
+        0.636206328868866,
+        0.544193685054779
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(119,716),(370,846)<|box_end|>",
+      "parsed_bbox": [
+        119,
+        716,
+        370,
+        846
+      ],
+      "iou": 0.0,
+      "latency_ms": 684.1172315180302,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 41,
+      "ground_truth_bbox": [
+        0.3866666555404663,
+        0.023499999195337296,
+        0.6819999814033508,
+        0.7684999704360962
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(53,390),(768,674)<|box_end|>",
+      "parsed_bbox": [
+        53,
+        390,
+        768,
+        674
+      ],
+      "iou": 0.9229024052619934,
+      "latency_ms": 697.3388344049454,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 42,
+      "ground_truth_bbox": [
+        0.023000000044703484,
+        0.12087912112474442,
+        0.4505000114440918,
+        0.8351648449897766
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(121,24),(826,458)<|box_end|>",
+      "parsed_bbox": [
+        121,
+        24,
+        826,
+        458
+      ],
+      "iou": 0.9679307341575623,
+      "latency_ms": 632.4798464775085,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 43,
+      "ground_truth_bbox": [
+        0.46799999475479126,
+        0.03911111131310463,
+        0.7335000038146973,
+        0.48088890314102173
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(43,496),(471,730)<|box_end|>",
+      "parsed_bbox": [
+        43,
+        496,
+        471,
+        730
+      ],
+      "iou": 0.8538689613342285,
+      "latency_ms": 696.1396224796772,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 44,
+      "ground_truth_bbox": [
+        0.05943627282977104,
+        0.09191176295280457,
+        0.639399528503418,
+        0.8602941036224365
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(89,62),(862,743)<|box_end|>",
+      "parsed_bbox": [
+        89,
+        62,
+        862,
+        743
+      ],
+      "iou": 0.839663028717041,
+      "latency_ms": 738.348476588726,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 45,
+      "ground_truth_bbox": [
+        0.057999998331069946,
+        0.3964444398880005,
+        0.36500000953674316,
+        0.6844444274902344
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(390,54),(690,363)<|box_end|>",
+      "parsed_bbox": [
+        390,
+        54,
+        690,
+        363
+      ],
+      "iou": 0.9417211413383484,
+      "latency_ms": 691.8607205152512,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 46,
+      "ground_truth_bbox": [
+        0.20350150763988495,
+        0.3102409541606903,
+        0.5343173146247864,
+        0.7510040402412415
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(314,203),(747,537)<|box_end|>",
+      "parsed_bbox": [
+        314,
+        203,
+        747,
+        537
+      ],
+      "iou": 0.9731848239898682,
+      "latency_ms": 855.9935688972473,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 47,
+      "ground_truth_bbox": [
+        0.1816176474094391,
+        0.03614457696676254,
+        0.5360293984413147,
+        0.9728915691375732
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(34,181),(974,544)<|box_end|>",
+      "parsed_bbox": [
+        34,
+        181,
+        974,
+        544
+      ],
+      "iou": 0.9729620218276978,
+      "latency_ms": 419.05922070145607,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 48,
+      "ground_truth_bbox": [
+        0.46031367778778076,
+        0.5147435665130615,
+        0.677281379699707,
+        0.7496795058250427
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(517,464),(752,680)<|box_end|>",
+      "parsed_bbox": [
+        517,
+        464,
+        752,
+        680
+      ],
+      "iou": 0.952384889125824,
+      "latency_ms": 842.5823226571083,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 49,
+      "ground_truth_bbox": [
+        0.3607959449291229,
+        0.360897421836853,
+        0.7608770132064819,
+        0.6565102338790894
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(353,361),(653,757)<|box_end|>",
+      "parsed_bbox": [
+        353,
+        361,
+        653,
+        757
+      ],
+      "iou": 0.9528499841690063,
+      "latency_ms": 814.0186257660389,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 50,
+      "ground_truth_bbox": [
+        0.14920978248119354,
+        0.07199999690055847,
+        0.6732797026634216,
+        0.8524444699287415
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(63,151),(858,561)<|box_end|>",
+      "parsed_bbox": [
+        63,
+        151,
+        858,
+        561
+      ],
+      "iou": 0.7710875272750854,
+      "latency_ms": 695.1741576194763,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 51,
+      "ground_truth_bbox": [
+        0.621874988079071,
+        0.510937511920929,
+        0.7515624761581421,
+        0.8515625
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(531,635),(851,748)<|box_end|>",
+      "parsed_bbox": [
+        531,
+        635,
+        851,
+        748
+      ],
+      "iou": 0.8185664415359497,
+      "latency_ms": 423.369150608778,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 52,
+      "ground_truth_bbox": [
+        0.0,
+        0.006267217453569174,
+        1.0,
+        0.9920110702514648
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,10),(984,813)<|box_end|>",
+      "parsed_bbox": [
+        14,
+        10,
+        984,
+        813
+      ],
+      "iou": 0.7901748418807983,
+      "latency_ms": 510.8775272965431,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 53,
+      "ground_truth_bbox": [
+        0.15746968984603882,
+        0.032596733421087265,
+        0.8628473281860352,
+        0.7546992897987366
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(31,125),(753,861)<|box_end|>",
+      "parsed_bbox": [
+        31,
+        125,
+        753,
+        861
+      ],
+      "iou": 0.9492513537406921,
+      "latency_ms": 734.675258398056,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 54,
+      "ground_truth_bbox": [
+        0.41580578684806824,
+        0.35300925374031067,
+        0.7702952027320862,
+        0.7399691343307495
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(353,407),(742,751)<|box_end|>",
+      "parsed_bbox": [
+        353,
+        407,
+        742,
+        751
+      ],
+      "iou": 0.9180665612220764,
+      "latency_ms": 740.8940345048904,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 55,
+      "ground_truth_bbox": [
+        0.06741566956043243,
+        0.24387255311012268,
+        0.5821078419685364,
+        0.5857843160629272
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(241,70),(578,583)<|box_end|>",
+      "parsed_bbox": [
+        241,
+        70,
+        578,
+        583
+      ],
+      "iou": 0.9626345634460449,
+      "latency_ms": 754.5797154307365,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 56,
+      "ground_truth_bbox": [
+        0.35503801703453064,
+        0.16634614765644073,
+        0.6297528743743896,
+        0.4355769157409668
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(164,354),(434,630)<|box_end|>",
+      "parsed_bbox": [
+        164,
+        354,
+        434,
+        630
+      ],
+      "iou": 0.9809917211532593,
+      "latency_ms": 805.6819550693035,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 57,
+      "ground_truth_bbox": [
+        0.3204118609428406,
+        0.0774463638663292,
+        0.38370683789253235,
+        0.7697540521621704
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(79,333),(753,373)<|box_end|>",
+      "parsed_bbox": [
+        79,
+        333,
+        753,
+        373
+      ],
+      "iou": 0.6152496933937073,
+      "latency_ms": 773.3176611363888,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 58,
+      "ground_truth_bbox": [
+        0.14966242015361786,
+        0.16899999976158142,
+        0.6725431084632874,
+        0.7404999732971191
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(168,151),(740,676)<|box_end|>",
+      "parsed_bbox": [
+        168,
+        151,
+        740,
+        676
+      ],
+      "iou": 0.9883049726486206,
+      "latency_ms": 736.6264648735523,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 59,
+      "ground_truth_bbox": [
+        0.7121913433074951,
+        0.3539094626903534,
+        0.8391203880310059,
+        0.48456791043281555
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(348,711),(481,841)<|box_end|>",
+      "parsed_bbox": [
+        348,
+        711,
+        481,
+        841
+      ],
+      "iou": 0.9091808199882507,
+      "latency_ms": 730.2665375173092,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 60,
+      "ground_truth_bbox": [
+        0.5,
+        0.06170421093702316,
+        0.5404411554336548,
+        0.8227227926254272
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(59,496),(821,569)<|box_end|>",
+      "parsed_bbox": [
+        59,
+        496,
+        821,
+        569
+      ],
+      "iou": 0.5513318181037903,
+      "latency_ms": 717.6967039704323,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 61,
+      "ground_truth_bbox": [
+        0.5094801187515259,
+        0.11177248507738113,
+        0.8070336580276489,
+        0.6974206566810608
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(109,517),(696,803)<|box_end|>",
+      "parsed_bbox": [
+        109,
+        517,
+        696,
+        803
+      ],
+      "iou": 0.9544966816902161,
+      "latency_ms": 760.6218755245209,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 62,
+      "ground_truth_bbox": [
+        0.4107142984867096,
+        0.16732804477214813,
+        0.6870039701461792,
+        0.7539682388305664
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(169,414),(754,684)<|box_end|>",
+      "parsed_bbox": [
+        169,
+        414,
+        754,
+        684
+      ],
+      "iou": 0.9743981957435608,
+      "latency_ms": 785.2206826210022,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 63,
+      "ground_truth_bbox": [
+        0.031111111864447594,
+        0.44798529148101807,
+        0.6382222175598145,
+        0.8719080686569214
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(448,27),(866,640)<|box_end|>",
+      "parsed_bbox": [
+        448,
+        27,
+        866,
+        640
+      ],
+      "iou": 0.9766871333122253,
+      "latency_ms": 692.0184828341007,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 64,
+      "ground_truth_bbox": [
+        0.2043779045343399,
+        0.17728757858276367,
+        0.5629383325576782,
+        0.8157680034637451
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(177,210),(816,533)<|box_end|>",
+      "parsed_bbox": [
+        177,
+        210,
+        816,
+        533
+      ],
+      "iou": 0.9001644849777222,
+      "latency_ms": 771.8194611370564,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 65,
+      "ground_truth_bbox": [
+        0.239103764295578,
+        0.3148764371871948,
+        0.5220443606376648,
+        0.709030032157898
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(359,243),(700,486)<|box_end|>",
+      "parsed_bbox": [
+        359,
+        243,
+        700,
+        486
+      ],
+      "iou": 0.7430189251899719,
+      "latency_ms": 817.9979063570499,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 66,
+      "ground_truth_bbox": [
+        0.3479999899864197,
+        0.05849999934434891,
+        0.5920000076293945,
+        0.9465000033378601
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(53,266),(953,676)<|box_end|>",
+      "parsed_bbox": [
+        53,
+        266,
+        953,
+        676
+      ],
+      "iou": 0.5871869921684265,
+      "latency_ms": 707.0882730185986,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 67,
+      "ground_truth_bbox": [
+        0.14090019464492798,
+        0.019179893657565117,
+        0.7899543642997742,
+        0.460317462682724
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,10),(966,948)<|box_end|>",
+      "parsed_bbox": [
+        14,
+        10,
+        966,
+        948
+      ],
+      "iou": 0.32063814997673035,
+      "latency_ms": 734.9354363977909,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 68,
+      "ground_truth_bbox": [
+        0.2360703945159912,
+        0.1394922137260437,
+        0.8331181406974792,
+        0.9976447820663452
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(143,238),(1000,826)<|box_end|>",
+      "parsed_bbox": [
+        143,
+        238,
+        1000,
+        826
+      ],
+      "iou": 0.9781761169433594,
+      "latency_ms": 741.3555420935154,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 69,
+      "ground_truth_bbox": [
+        0.28700000047683716,
+        0.07999999821186066,
+        0.8462552428245544,
+        0.7786666750907898
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(79,291),(777,800)<|box_end|>",
+      "parsed_bbox": [
+        79,
+        291,
+        777,
+        800
+      ],
+      "iou": 0.9067866206169128,
+      "latency_ms": 727.542120963335,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 70,
+      "ground_truth_bbox": [
+        0.19184359908103943,
+        0.16299019753932953,
+        0.6960784196853638,
+        0.8158625364303589
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(154,223),(809,700)<|box_end|>",
+      "parsed_bbox": [
+        154,
+        223,
+        809,
+        700
+      ],
+      "iou": 0.9095021486282349,
+      "latency_ms": 791.0359650850296,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 71,
+      "ground_truth_bbox": [
+        0.03174273297190666,
+        0.3341214060783386,
+        0.43686118721961975,
+        0.6293769478797913
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(336,33),(626,437)<|box_end|>",
+      "parsed_bbox": [
+        336,
+        33,
+        626,
+        437
+      ],
+      "iou": 0.9788224697113037,
+      "latency_ms": 803.7028089165688,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 72,
+      "ground_truth_bbox": [
+        0.014370867051184177,
+        0.020783649757504463,
+        0.9051470756530762,
+        0.9603039622306824
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(24,24),(954,929)<|box_end|>",
+      "parsed_bbox": [
+        24,
+        24,
+        954,
+        929
+      ],
+      "iou": 0.9538825154304504,
+      "latency_ms": 741.9451251626015,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 73,
+      "ground_truth_bbox": [
+        0.5898919701576233,
+        0.3369341492652893,
+        0.7218364477157593,
+        0.6069958806037903
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(336,594),(604,720)<|box_end|>",
+      "parsed_bbox": [
+        336,
+        594,
+        604,
+        720
+      ],
+      "iou": 0.9412447810173035,
+      "latency_ms": 736.081562936306,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 74,
+      "ground_truth_bbox": [
+        0.5187737345695496,
+        0.2669871747493744,
+        0.6535171270370483,
+        0.6814102530479431
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(268,523),(676,650)<|box_end|>",
+      "parsed_bbox": [
+        268,
+        523,
+        676,
+        650
+      ],
+      "iou": 0.9279239773750305,
+      "latency_ms": 847.2046740353107,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 75,
+      "ground_truth_bbox": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(0,0),(1000,1000)<|box_end|>",
+      "parsed_bbox": [
+        0,
+        0,
+        1000,
+        1000
+      ],
+      "iou": 1.0,
+      "latency_ms": 694.3979747593403,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 76,
+      "ground_truth_bbox": [
+        0.07595425099134445,
+        0.050245098769664764,
+        0.47956517338752747,
+        0.903825581073761
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(43,87),(904,490)<|box_end|>",
+      "parsed_bbox": [
+        43,
+        87,
+        904,
+        490
+      ],
+      "iou": 0.9401662945747375,
+      "latency_ms": 771.279651671648,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 77,
+      "ground_truth_bbox": [
+        0.3177083432674408,
+        0.04616013169288635,
+        0.7254902124404907,
+        0.9787581562995911
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(49,313),(978,724)<|box_end|>",
+      "parsed_bbox": [
+        49,
+        313,
+        978,
+        724
+      ],
+      "iou": 0.9812158942222595,
+      "latency_ms": 767.5740718841553,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 78,
+      "ground_truth_bbox": [
+        0.46050000190734863,
+        0.10222221910953522,
+        0.8044999837875366,
+        0.7964444160461426
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(98,468),(798,806)<|box_end|>",
+      "parsed_bbox": [
+        98,
+        468,
+        798,
+        806
+      ],
+      "iou": 0.9660849571228027,
+      "latency_ms": 724.5731055736542,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 79,
+      "ground_truth_bbox": [
+        0.6319128274917603,
+        0.38799232244491577,
+        0.8463024497032166,
+        0.939460813999176
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(289,635),(937,845)<|box_end|>",
+      "parsed_bbox": [
+        289,
+        635,
+        937,
+        845
+      ],
+      "iou": 0.829331636428833,
+      "latency_ms": 793.3883666992188,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 80,
+      "ground_truth_bbox": [
+        0.43797528743743896,
+        0.3759615421295166,
+        0.7365557551383972,
+        0.6425546407699585
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(374,438),(640,787)<|box_end|>",
+      "parsed_bbox": [
+        374,
+        438,
+        640,
+        787
+      ],
+      "iou": 0.8421732783317566,
+      "latency_ms": 799.7639589011669,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 81,
+      "ground_truth_bbox": [
+        0.22800925374031067,
+        0.0,
+        0.9270833134651184,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(0,224),(1000,934)<|box_end|>",
+      "parsed_bbox": [
+        0,
+        224,
+        1000,
+        934
+      ],
+      "iou": 0.9846112728118896,
+      "latency_ms": 739.4155338406563,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 82,
+      "ground_truth_bbox": [
+        0.4325000047683716,
+        0.2275555580854416,
+        0.6340000033378601,
+        0.4471110999584198
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(224,430),(454,638)<|box_end|>",
+      "parsed_bbox": [
+        224,
+        430,
+        454,
+        638
+      ],
+      "iou": 0.9247583150863647,
+      "latency_ms": 739.6804541349411,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 83,
+      "ground_truth_bbox": [
+        0.0024999999441206455,
+        0.011435105465352535,
+        0.9933735132217407,
+        1.0
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(14,0),(990,990)<|box_end|>",
+      "parsed_bbox": [
+        14,
+        0,
+        990,
+        990
+      ],
+      "iou": 0.981483519077301,
+      "latency_ms": 712.6947194337845,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 84,
+      "ground_truth_bbox": [
+        0.5264295339584351,
+        0.4570499658584595,
+        0.9673084020614624,
+        0.6907740235328674
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(462,523),(697,964)<|box_end|>",
+      "parsed_bbox": [
+        462,
+        523,
+        697,
+        964
+      ],
+      "iou": 0.9392958283424377,
+      "latency_ms": 736.3492287695408,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 85,
+      "ground_truth_bbox": [
+        0.060150377452373505,
+        0.005859375,
+        0.9774436354637146,
+        0.978515625
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(0,0),(1000,1000)<|box_end|>",
+      "parsed_bbox": [
+        0,
+        0,
+        1000,
+        1000
+      ],
+      "iou": 0.8922110795974731,
+      "latency_ms": 302.44268849492073,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 86,
+      "ground_truth_bbox": [
+        0.3218750059604645,
+        0.21458333730697632,
+        0.598437488079071,
+        0.7145833373069763
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(207,324),(719,639)<|box_end|>",
+      "parsed_bbox": [
+        207,
+        324,
+        719,
+        639
+      ],
+      "iou": 0.8452423214912415,
+      "latency_ms": 358.6760275065899,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 87,
+      "ground_truth_bbox": [
+        0.6230000257492065,
+        0.08733333647251129,
+        0.7590000033378601,
+        0.531333327293396
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table-text<|object_ref_end|><|box_start|>(83,635),(531,890)<|box_end|>",
+      "parsed_bbox": [
+        83,
+        635,
+        531,
+        890
+      ],
+      "iou": 0.45995309948921204,
+      "latency_ms": 734.647061675787,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 88,
+      "ground_truth_bbox": [
+        0.22267110645771027,
+        0.3480769097805023,
+        0.535646378993988,
+        0.6836538314819336
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(351,223),(686,543)<|box_end|>",
+      "parsed_bbox": [
+        351,
+        223,
+        686,
+        543
+      ],
+      "iou": 0.9609953761100769,
+      "latency_ms": 824.0077570080757,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 89,
+      "ground_truth_bbox": [
+        0.0632440447807312,
+        0.0763888880610466,
+        0.5659722089767456,
+        0.5572090148925781
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(80,64),(546,570)<|box_end|>",
+      "parsed_bbox": [
+        80,
+        64,
+        546,
+        570
+      ],
+      "iou": 0.960263729095459,
+      "latency_ms": 810.1759515702724,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 90,
+      "ground_truth_bbox": [
+        0.2384081333875656,
+        0.13628517091274261,
+        0.4574841558933258,
+        0.485617458820343
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(131,238),(539,464)<|box_end|>",
+      "parsed_bbox": [
+        131,
+        238,
+        539,
+        464
+      ],
+      "iou": 0.8299750089645386,
+      "latency_ms": 826.383676379919,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 91,
+      "ground_truth_bbox": [
+        0.27666667103767395,
+        0.11349999904632568,
+        0.8579999804496765,
+        0.9225000143051147
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(109,266),(913,863)<|box_end|>",
+      "parsed_bbox": [
+        109,
+        266,
+        913,
+        863
+      ],
+      "iou": 0.9572929739952087,
+      "latency_ms": 766.8423354625702,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 92,
+      "ground_truth_bbox": [
+        0.06714178621768951,
+        0.5540000200271606,
+        0.6339635848999023,
+        0.9350000023841858
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(557,103),(928,581)<|box_end|>",
+      "parsed_bbox": [
+        557,
+        103,
+        928,
+        581
+      ],
+      "iou": 0.8211647272109985,
+      "latency_ms": 772.0024958252907,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 93,
+      "ground_truth_bbox": [
+        0.2486666738986969,
+        0.3230000138282776,
+        0.862666666507721,
+        0.671999990940094
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(323,253),(670,865)<|box_end|>",
+      "parsed_bbox": [
+        323,
+        253,
+        670,
+        865
+      ],
+      "iou": 0.9835361838340759,
+      "latency_ms": 734.7547225654125,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 94,
+      "ground_truth_bbox": [
+        0.19139093160629272,
+        0.038288287818431854,
+        0.8775720000267029,
+        0.9799103736877441
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(164,196),(983,871)<|box_end|>",
+      "parsed_bbox": [
+        164,
+        196,
+        983,
+        871
+      ],
+      "iou": 0.8496327996253967,
+      "latency_ms": 743.4609904885292,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 95,
+      "ground_truth_bbox": [
+        0.5721026659011841,
+        0.5158762335777283,
+        0.8694701194763184,
+        0.7788762450218201
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(527,576),(784,871)<|box_end|>",
+      "parsed_bbox": [
+        527,
+        576,
+        784,
+        871
+      ],
+      "iou": 0.9227718114852905,
+      "latency_ms": 738.3358664810658,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 96,
+      "ground_truth_bbox": [
+        0.08718752861022949,
+        0.16850000619888306,
+        0.8409979939460754,
+        0.8641433715820312
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(164,90),(860,838)<|box_end|>",
+      "parsed_bbox": [
+        164,
+        90,
+        860,
+        838
+      ],
+      "iou": 0.9800904989242554,
+      "latency_ms": 755.0629712641239,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 97,
+      "ground_truth_bbox": [
+        0.3532475531101227,
+        0.05269607901573181,
+        0.6017156839370728,
+        0.8672385811805725
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(46,358),(441,406)<|box_end|>",
+      "parsed_bbox": [
+        46,
+        358,
+        441,
+        406
+      ],
+      "iou": 0.09194736182689667,
+      "latency_ms": 770.946316421032,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 98,
+      "ground_truth_bbox": [
+        0.21291649341583252,
+        0.0017585356254130602,
+        0.6949986815452576,
+        0.8995097875595093
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(10,219),(894,669)<|box_end|>",
+      "parsed_bbox": [
+        10,
+        219,
+        894,
+        669
+      ],
+      "iou": 0.9191528558731079,
+      "latency_ms": 792.484950274229,
+      "success": true,
+      "error": null
+    },
+    {
+      "sample_idx": 99,
+      "ground_truth_bbox": [
+        0.18734177947044373,
+        0.31049999594688416,
+        0.6081024408340454,
+        0.7229160666465759
+      ],
+      "raw_output": "<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(313,190),(716,607)<|box_end|>",
+      "parsed_bbox": [
+        313,
+        190,
+        716,
+        607
+      ],
+      "iou": 0.9684348106384277,
+      "latency_ms": 770.9580287337303,
+      "success": true,
+      "error": null
+    }
+  ]
+}
