@@ -60,7 +60,7 @@ def create_calibration_dataset_for_gptqmodel(num_samples: int = 128):
     ds = load_dataset("openfoodfacts/nutrition-table-detection", split="train")
     num_samples = min(num_samples, len(ds))
 
-    user_prompt = "Detect the bounding box coordinates for the nutrition facts table in this image."
+    user_prompt = "Detect the bounding box of the nutrition table."
 
     calibration_data = []
     for i in tqdm(range(num_samples), desc="Preparing calibration data"):
