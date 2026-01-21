@@ -917,3 +917,169 @@ Based on the reliable experiments (primarily Experiment 6), here are the defensi
 
 **Weak claims (qualify heavily):**
 > "With prefix caching enabled and repeated workloads, throughput can improve by an order of magnitude. However, these gains represent best-case scenarios with warm caches; novel workloads will see smaller improvements."
+
+---
+
+## Appendix B: Which Layers Are Quantized
+
+This section documents exactly which model components are quantized to INT4 and which remain in BF16.
+
+### B.1 Quantization Summary
+
+| Component | Quantized? | Dtype | Count |
+|-----------|------------|-------|-------|
+| Vision encoder (`model.visual.*`) | ❌ No | bfloat16 | 391 layers |
+| LLM attention projections | ✅ Yes | int4 (`.qweight`) | 196 layers |
+| LLM MLP layers | ✅ Yes | int4 (`.qweight`) | (included above) |
+| LayerNorm | ❌ No | bfloat16 | ~56 layers |
+| Embeddings | ❌ No | bfloat16 | 1 layer |
+| LM head | ❌ No | bfloat16 | 1 layer |
+
+### B.2 Verification Evidence
+
+Inspecting the quantized model's safetensors files reveals:
+
+**Vision Encoder (NOT quantized - remains BF16):**
+```
+model.visual.blocks.0.attn.proj.weight      → torch.bfloat16
+model.visual.blocks.0.attn.qkv.weight       → torch.bfloat16
+model.visual.blocks.0.mlp.fc1.weight        → torch.bfloat16
+model.visual.blocks.0.mlp.fc2.weight        → torch.bfloat16
+... (391 total vision encoder tensors, ALL in bfloat16)
+```
+
+**LLM Decoder (Quantized - stored as .qweight):**
+```
+model.language_model.layers.0.self_attn.q_proj.qweight  ← INT4 quantized
+model.language_model.layers.0.self_attn.k_proj.qweight  ← INT4 quantized
+model.language_model.layers.0.self_attn.v_proj.qweight  ← INT4 quantized
+model.language_model.layers.0.self_attn.o_proj.qweight  ← INT4 quantized
+model.language_model.layers.0.mlp.gate_proj.qweight     ← INT4 quantized
+model.language_model.layers.0.mlp.up_proj.qweight       ← INT4 quantized
+model.language_model.layers.0.mlp.down_proj.qweight     ← INT4 quantized
+... (196 total quantized layers across 28 transformer blocks)
+```
+
+**LayerNorm (NOT quantized - remains BF16):**
+```
+model.language_model.layers.0.input_layernorm.weight          → torch.bfloat16
+model.language_model.layers.0.post_attention_layernorm.weight → torch.bfloat16
+```
+
+### B.3 How GPTQModel Handles VLM Quantization
+
+The `scripts/quantize_model_gptq.py` script does **not** explicitly specify which layers to exclude. GPTQModel's built-in Qwen2-VL handler automatically:
+
+1. **Identifies vision encoder layers** by matching `model.visual.*` patterns
+2. **Excludes them from quantization** to preserve image understanding accuracy
+3. **Excludes LayerNorm layers** (small and sensitive to quantization)
+4. **Excludes embedding/lm_head** (typically kept in higher precision)
+5. **Quantizes only the LLM decoder** linear layers (attention projections + MLP)
+
+This is why the TTFT (Time To First Token) remains similar between BF16 and GPTQ (~650ms) - the vision encoder that dominates prefill time is not quantized.
+
+### B.4 How to Verify Quantization
+
+#### Key Indicator: Tensor Name Suffix
+
+The primary way to identify quantized vs non-quantized layers is by **tensor name suffix**:
+
+| Tensor Name | Meaning |
+|-------------|---------|
+| `*.weight` | Normal, non-quantized weights (BF16/FP16) |
+| `*.qweight` | Quantized weights (INT4 packed into INT32) |
+
+**Example comparison:**
+
+```
+NON-QUANTIZED (vision encoder):
+  model.visual.blocks.0.attn.proj.weight   ← ends in .weight
+  model.visual.blocks.0.attn.proj.bias
+
+QUANTIZED (LLM decoder):
+  model.language_model.layers.0.self_attn.q_proj.qweight  ← ends in .qweight
+  model.language_model.layers.0.self_attn.q_proj.scales   ← scale factors
+  model.language_model.layers.0.self_attn.q_proj.qzeros   ← zero points
+  model.language_model.layers.0.self_attn.q_proj.g_idx    ← group indices
+  model.language_model.layers.0.self_attn.q_proj.bias
+```
+
+#### GPTQ Tensor Format
+
+A quantized layer has **5 tensors** instead of the normal 2 (weight + bias):
+
+| Tensor | Dtype | Purpose |
+|--------|-------|---------|
+| `.qweight` | int32 | 8 INT4 weights packed into each INT32 |
+| `.scales` | float16 | Scale factor per group (group_size=128) |
+| `.qzeros` | int32 | Zero point per group |
+| `.g_idx` | int32 | Group indices for reordering |
+| `.bias` | float16 | Unchanged from original |
+
+#### Mathematical Proof of INT4
+
+For layer `q_proj` with original shape `[3584, 3584]`:
+
+```
+qweight shape: [448, 3584]
+448 = 3584 / 8  ← 8 INT4 values packed per INT32 (8 × 4 bits = 32 bits)
+
+scales shape: [28, 3584]
+28 = 3584 / 128  ← one scale per group (group_size=128)
+```
+
+#### Verification Script
+
+```python
+from safetensors import safe_open
+import os
+
+model_path = "/path/to/quantized/model"
+
+for fname in os.listdir(model_path):
+    if fname.endswith(".safetensors"):
+        with safe_open(os.path.join(model_path, fname), framework="pt") as f:
+            for key in f.keys():
+                tensor = f.get_tensor(key)
+                if ".qweight" in key:
+                    print(f"QUANTIZED: {key}")
+                    print(f"  shape: {tensor.shape} (first dim is 1/8 of original)")
+                elif ".weight" in key:
+                    print(f"{tensor.dtype}: {key}")
+```
+
+### B.5 Quantization Toolchain
+
+**Important**: Quantization and serving use different tools.
+
+| Step | Tool | Repository |
+|------|------|------------|
+| **Quantization** | GPTQModel | https://github.com/ModelCloud/GPTQModel |
+| **Serving** | vLLM | https://github.com/vllm-project/vllm |
+
+**Quantization** (creates the GPTQ model):
+```python
+# scripts/quantize_model_gptq.py uses GPTQModel (third-party library)
+from gptqmodel import GPTQModel, QuantizeConfig
+
+model = GPTQModel.load(model_path, quantize_config=config)
+model.quantize(calibration_data)  # ← This creates .qweight, .scales, etc.
+model.save(output_path)
+```
+
+**Serving** (runs the quantized model):
+```bash
+# vLLM reads the GPTQ format and uses optimized kernels
+vllm serve /path/to/quantized/model \
+    --quantization gptq_marlin \  # ← tells vLLM to use GPTQ kernels
+    --dtype half
+```
+
+vLLM does **not** perform quantization—it only knows how to load and run already-quantized models.
+
+### B.6 Why Vision Encoder Is Not Quantized
+
+1. **Accuracy preservation**: Vision encoders are sensitive to quantization; small errors in visual features propagate to incorrect object detection
+2. **Relatively small size**: The vision encoder (~1.5-2 GB) is a small fraction of total model size
+3. **Prefill-bound workloads**: Vision encoding happens once per image during prefill; quantizing it would not significantly improve decode throughput
+4. **Standard practice**: Most VLM quantization approaches (GPTQ, AWQ, etc.) keep the vision encoder in full precision
