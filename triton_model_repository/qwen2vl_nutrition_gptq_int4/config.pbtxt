@@ -1,0 +1,92 @@
+# Triton Model Configuration for Qwen2-VL Nutrition Detection (GPTQ INT4)
+#
+# This configuration uses the vLLM backend for serving the quantized Qwen2-VL model.
+# The vLLM backend handles continuous batching, PagedAttention, and multimodal input.
+#
+# Usage:
+#   tritonserver --model-repository=/path/to/triton_model_repository
+#
+# API Endpoint (VLM with image):
+#   POST /v2/models/qwen2vl_nutrition_gptq_int4/infer
+#
+# NOTE: Use /infer endpoint (not /generate) for VLM with image input.
+
+name: "qwen2vl_nutrition_gptq_int4"
+backend: "vllm"
+
+# max_batch_size=0 means vLLM handles batching internally (continuous batching)
+max_batch_size: 0
+
+# Input tensors
+# The vLLM backend expects these specific tensor names
+input [
+  {
+    # Required: The text prompt
+    name: "text_input"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    # Optional: Base64-encoded image for VLM
+    # Backend decodes base64 -> PIL RGB -> vLLM multi_modal_data
+    name: "image"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    # Optional: JSON string with sampling parameters
+    # Example: '{"temperature": 0, "max_tokens": 100}'
+    name: "sampling_parameters"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    # Optional: Whether to stream the response
+    name: "stream"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    # Optional: Exclude input from output (useful for chat)
+    name: "exclude_input_in_output"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  }
+]
+
+# Output tensor
+output [
+  {
+    # Generated text output
+    name: "text_output"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+  }
+]
+
+# Instance configuration
+# For single GPU deployment, one instance is sufficient
+# vLLM handles concurrent requests internally via continuous batching
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+    # Pin to GPU 1 (BF16 uses GPU 0)
+    gpus: [ 1 ]
+  }
+]
+
+# Model transaction policy
+# vLLM backend uses decoupled mode for streaming support
+model_transaction_policy {
+  decoupled: true
+}
+
+# Optional: Response cache (disabled by default)
+# response_cache {
+#   enable: false
+# }

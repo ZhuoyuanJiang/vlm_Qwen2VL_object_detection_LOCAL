@@ -1,0 +1,25 @@
+{
+    "_comment": "vLLM Backend Configuration for Qwen2-VL Nutrition Detection (GPTQ INT4)",
+    "_comment2": "These parameters are passed to vLLM EngineArgs/AsyncEngineArgs",
+    "_comment3": "Adjust 'model' path to match your cloud server mount point",
+
+    "model": "/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4",
+
+    "tokenizer_mode": "auto",
+    "trust_remote_code": true,
+
+    "dtype": "half",
+    "quantization": "gptq_marlin",
+
+    "tensor_parallel_size": 1,
+    "gpu_memory_utilization": 0.9,
+
+    "max_model_len": 4096,
+
+    "limit_mm_per_prompt": {
+        "image": 1
+    },
+
+    "disable_log_stats": false,
+    "disable_log_requests": false
+}

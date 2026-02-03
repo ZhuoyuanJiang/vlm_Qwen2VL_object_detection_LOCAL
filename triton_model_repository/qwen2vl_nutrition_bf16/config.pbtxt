@@ -1,0 +1,61 @@
+# Triton Model Configuration for Qwen2-VL Nutrition Detection (BF16 Baseline)
+#
+# This is the full-precision model for comparison with GPTQ quantized version.
+# Use this for A/B testing and accuracy validation.
+
+name: "qwen2vl_nutrition_bf16"
+backend: "vllm"
+max_batch_size: 0
+
+input [
+  {
+    name: "text_input"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    name: "image"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "sampling_parameters"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "stream"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "exclude_input_in_output"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "text_output"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+    # Pin to GPU 0 (GPTQ will use GPU 1)
+    gpus: [ 0 ]
+  }
+]
+
+model_transaction_policy {
+  decoupled: true
+}
