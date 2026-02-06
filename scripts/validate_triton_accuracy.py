@@ -203,7 +203,7 @@ def main():
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON file path")
     parser.add_argument("--prompt", type=str,
-                        default="Detect the nutrition facts table in this image and return the bounding box coordinates.",
+                        default="Detect the bounding box of the nutrition table.",
                         help="Prompt to use for inference")
 
     args = parser.parse_args()
