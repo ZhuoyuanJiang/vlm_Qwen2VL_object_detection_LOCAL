@@ -21,6 +21,7 @@ import asyncio
 import base64
 import json
 import time
+from functools import lru_cache
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
@@ -82,21 +83,24 @@ class BenchmarkSummary:
     p99_latency_ms: float
 
 
+DATASET_ID = "openfoodfacts/nutrition-table-detection"
+
+@lru_cache(maxsize=1)
+def _load_test_dataset():
+    """Load evaluation dataset split once (prefer 'val', fall back to 'validation')."""
+    from datasets import load_dataset
+
+    try:
+        return load_dataset(DATASET_ID, split="val")
+    except ValueError:
+        return load_dataset(DATASET_ID, split="validation")
+
+
 def load_test_image(image_index: int = 0) -> str:
     """Load a test image and return as base64 string."""
-    try:
-        from datasets import load_dataset
-        dataset = load_dataset(
-            "zhuoyuaneh/nutrition_facts",
-            split="validation",
-            trust_remote_code=True
-        )
-        image = dataset[image_index % len(dataset)]["image"]
-    except Exception as e:
-        print(f"Could not load from HuggingFace dataset: {e}")
-        print("Creating a dummy test image...")
-        # Create a simple test image
-        image = Image.new("RGB", (224, 224), color=(128, 128, 128))
+    # Use the same dataset and split as evaluate_vllm_accuracy.py
+    dataset = _load_test_dataset()
+    image = dataset[image_index % len(dataset)]["image"]
 
     # Convert to base64
     buffer = io.BytesIO()
@@ -105,20 +109,34 @@ def load_test_image(image_index: int = 0) -> str:
 
 
 def create_http_payload(text_input: str, image_b64: str, temperature: float = 0.0, max_tokens: int = 100) -> dict:
-    """Create HTTP inference request payload."""
+    """
+    Create HTTP inference request payload for Triton.
+
+    IMPORTANT: The input names, shapes, and datatypes here MUST match the
+    config.pbtxt in your Triton model repository. If they don't match,
+    Triton will reject the request with a validation error.
+
+    Expected config.pbtxt inputs:
+        input { name: "text_input"           data_type: TYPE_STRING dims: [1] }
+        input { name: "image"                data_type: TYPE_STRING dims: [1] }
+        input { name: "sampling_parameters"  data_type: TYPE_STRING dims: [1] optional: true }
+        input { name: "stream"               data_type: TYPE_BOOL   dims: [1] optional: true }
+
+    Mapping: config.pbtxt TYPE_STRING -> HTTP "BYTES" datatype
+    """
     return {
         "inputs": [
             {
-                "name": "text_input",
-                "shape": [1],
-                "datatype": "BYTES",
+                "name": "text_input",       # Must match config.pbtxt input name
+                "shape": [1],               # Must match config.pbtxt dims
+                "datatype": "BYTES",        # TYPE_STRING in pbtxt = BYTES in HTTP
                 "data": [text_input]
             },
             {
-                "name": "image",
+                "name": "image",            # Must match config.pbtxt input name
                 "shape": [1],
                 "datatype": "BYTES",
-                "data": [image_b64]
+                "data": [image_b64]         # Base64-encoded image
             },
             {
                 "name": "sampling_parameters",
@@ -127,10 +145,10 @@ def create_http_payload(text_input: str, image_b64: str, temperature: float = 0.
                 "data": [json.dumps({"temperature": temperature, "max_tokens": max_tokens})]
             },
             {
-                "name": "stream",
+                "name": "stream",           # Controls output streaming
                 "shape": [1],
-                "datatype": "BOOL",
-                "data": [False]
+                "datatype": "BOOL",         # TYPE_BOOL in pbtxt = BOOL in HTTP
+                "data": [False]             # False = return complete response
             }
         ]
     }
