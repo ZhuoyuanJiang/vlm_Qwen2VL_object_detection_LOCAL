@@ -5,6 +5,12 @@ Training script for Qwen2-VL nutrition table detection.
 This is a clean training script that uses the extracted modules from src/.
 It's much shorter (~150 lines) than the original 4000+ line notebook.
 
+NOTE:
+    For most actual training runs in this repo, we use `scripts/train_recipe.py`
+    (it is the recommended, feature-complete training entry point). This file is
+    kept as a minimal/educational training example and may lag behind newer
+    workflows.
+
 Usage:
     python scripts/train.py
 
@@ -65,7 +71,8 @@ CONFIG = {
     # Dataset
     "dataset_id": "openfoodfacts/nutrition-table-detection",
     "train_split": "train",
-    "eval_split": "test",  # Using test as eval since no val split
+    # NOTE: This dataset uses "val" for validation (not the more common "validation").
+    "eval_split": "val",
 
     # W&B
     "wandb_project": "qwen2vl-nutrition-detection",
@@ -81,13 +88,33 @@ print("="*60)
 
 dataset = load_dataset(CONFIG["dataset_id"])
 print(f"Dataset loaded: {CONFIG['dataset_id']}")
-print(f"Train samples: {len(dataset[CONFIG['train_split']])}")
-print(f"Eval samples: {len(dataset[CONFIG['eval_split']])}")
+
+# Resolve split name(s) with a small alias fallback to avoid KeyError.
+available_splits = list(dataset.keys())
+
+def _resolve_split(split_name: str) -> str:
+    if split_name in dataset:
+        return split_name
+    alias_map = {"val": "validation", "validation": "val"}
+    alias = alias_map.get(split_name)
+    if alias and alias in dataset:
+        print(f"Warning: split '{split_name}' not found; using '{alias}' instead")
+        return alias
+    raise KeyError(
+        f"Split '{split_name}' not found for dataset '{CONFIG['dataset_id']}'. "
+        f"Available splits: {available_splits}"
+    )
+
+train_split = _resolve_split(CONFIG["train_split"])
+eval_split = _resolve_split(CONFIG["eval_split"])
+
+print(f"Train samples: {len(dataset[train_split])}")
+print(f"Eval samples: {len(dataset[eval_split])}")
 
 # Format dataset for training
 print("\nFormatting dataset...")
-train_dataset = dataset[CONFIG["train_split"]]
-eval_dataset = dataset[CONFIG["eval_split"]]
+train_dataset = dataset[train_split]
+eval_dataset = dataset[eval_split]
 
 # Apply formatting and filter invalid samples
 train_dataset_formatted = train_dataset.map(
