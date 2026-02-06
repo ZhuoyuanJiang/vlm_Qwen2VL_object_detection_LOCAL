@@ -213,18 +213,13 @@ def main():
     baseline_data = load_baseline_outputs(args.baseline)
     print(f"Loaded {len(baseline_data)} baseline samples")
 
-    # Load dataset for images
+    # Load dataset for images (same as evaluate_vllm_accuracy.py)
     print("Loading dataset...")
-    try:
-        from datasets import load_dataset
-        dataset = load_dataset(
-            "zhuoyuaneh/nutrition_facts",
-            split="validation",
-            trust_remote_code=True
-        )
-    except Exception as e:
-        print(f"Failed to load dataset: {e}")
-        return
+    from datasets import load_dataset
+    dataset = load_dataset(
+        "openfoodfacts/nutrition-table-detection",
+        split="val"
+    )
 
     # Determine number of samples
     num_samples = args.num_samples or min(len(baseline_data), len(dataset))
