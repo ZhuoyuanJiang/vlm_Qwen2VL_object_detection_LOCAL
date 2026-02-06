@@ -2,6 +2,22 @@
 """
 Test deployed Qwen2-VL model inference via vLLM or Triton endpoints.
 
+DEPRECATED (2026-02-06):
+    This was an early deployment smoke-test script committed during the initial
+    vLLM/Triton deployment work (late Dec 2025). It is not part of the current,
+    actively-maintained evaluation/benchmarking flow and may be deleted later.
+
+    Prefer these scripts instead:
+      - vLLM: `scripts/test_vllm_api.py`, `scripts/test_vllm_with_visualization.py`
+      - vLLM accuracy: `scripts/evaluate_vllm_accuracy.py`, `scripts/establish_baseline.py`
+      - Triton accuracy: `scripts/validate_triton_accuracy.py`
+      - Triton benchmarking: `scripts/benchmark_triton.py`
+
+    Note:
+      - The `--use-dataset` path in this script uses a `split="test"` dataset
+        which does not exist for `openfoodfacts/nutrition-table-detection`
+        (it uses `train`/`val`).
+
 This script tests the deployed model by sending inference requests
 and verifying the responses contain valid bounding box outputs.
 
@@ -296,6 +312,13 @@ def get_sample_image_from_dataset() -> Optional[str]:
 
 
 def main():
+    print(
+        "WARNING: `scripts/test_deployment_inference.py` is deprecated. "
+        "Prefer `scripts/test_vllm_api.py`, `scripts/test_vllm_with_visualization.py`, "
+        "`scripts/evaluate_vllm_accuracy.py`, `scripts/benchmark_triton.py`, or "
+        "`scripts/validate_triton_accuracy.py`."
+    )
+
     parser = argparse.ArgumentParser(
         description="Test deployed Qwen2-VL model inference",
         formatter_class=argparse.RawDescriptionHelpFormatter,
