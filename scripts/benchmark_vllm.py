@@ -14,6 +14,10 @@ Metrics collected:
 Usage:
     python scripts/benchmark_vllm.py --num-requests 10 --concurrency 1
     python scripts/benchmark_vllm.py --num-requests 20 --concurrency 4
+
+Note:
+    This script's prompts are aligned to training (system + user). If you
+    benchmarked with older prompts, rerun for apples-to-apples comparison.
 """
 
 import argparse
@@ -52,16 +56,11 @@ VLLM_HOST = "localhost"
 VLLM_PORT = 8000  # Default, can be overridden via --port
 MODEL_NAME = "qwen2vl-nutrition"
 
-SYSTEM_PROMPT = """You are a nutrition label detector. Your task is to identify nutrition tables/panels in food product images.
+SYSTEM_PROMPT = """You are a Vision Language Model specialized in interpreting visual data from product images.
+Your task is to analyze the provided product images and detect the nutrition tables in a certain format.
+Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
 
-When you detect a nutrition table, output its location using this exact format:
-<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
-
-Coordinates are in [0,1000) range where (0,0) is top-left.
-If no nutrition table is found, say "No nutrition table detected."
-"""
-
-USER_PROMPT = "Detect the bounding box coordinates for the nutrition facts table in this image."
+USER_PROMPT = "Detect the bounding box of the nutrition table."
 
 
 # =============================================================================

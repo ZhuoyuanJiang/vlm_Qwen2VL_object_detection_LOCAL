@@ -1622,3 +1622,106 @@ grpcclient.InferInput("stream",              [1], "BOOL")    # Must match
 | What happens if they don't match? | Triton returns an error. |
 | How do you ensure they match? | You, the programmer, manually keep them in sync. |
 
+---
+
+## Q35: How does the image "replace" the `<|image_pad|>` placeholder? What's the end-to-end flow?
+
+A:
+
+**The image does NOT literally replace `<|image_pad|>` in the text string.** They are sent as two separate inputs and merged inside the server at the embedding level.
+
+**Client side — two separate inputs:**
+
+```python
+# These travel as SEPARATE fields, never combined in your code
+payload = {
+    "inputs": [
+        {"name": "text_input", "data": ["...<|image_pad|>...Detect..."]},  # Text with placeholder
+        {"name": "image",      "data": ["/9j/4AAQ..."]},                   # Actual image (base64)
+    ]
+}
+```
+
+**End-to-end steps:**
+
+```
+Step 1: CLIENT — Build text prompt (once, reused for all requests)
+        build_chat_template_prompt() produces:
+        "<|im_start|>system\n...<|im_end|>\n<|im_start|>user\n
+         <|vision_start|><|image_pad|><|vision_end|>Detect the bounding box...<|im_end|>\n
+         <|im_start|>assistant\n"
+
+Step 2: CLIENT — Build payload (per request)
+        text_input = the template from step 1 (same for all)
+        image      = base64 of this specific image (different per request)
+        → Sent as two separate input fields
+
+Step 3: TRITON — Receives both fields, validates against config.pbtxt, passes to vLLM backend
+
+Step 4: vLLM BACKEND — Where the "replacement" happens
+        4a. Extract text_input string
+        4b. Decode base64 → image pixels
+        4c. Tokenize text_input into tokens:
+            [...system tokens...] [<|vision_start|>] [<|image_pad|>] [<|vision_end|>] [user text...]
+                                                          ↑
+                                                   Marks WHERE image goes
+        4d. Run image through VISION ENCODER → visual embeddings (e.g. 256 vectors)
+        4e. INSERT visual embeddings at the <|image_pad|> position:
+            [...system...] [<|vision_start|>] [IMG_1 IMG_2 ... IMG_256] [<|vision_end|>] [user text...]
+                                               ↑ actual image features injected here
+        4f. Run full sequence (text + image embeddings) through the LLM
+        4g. Generate output: "<|box_start|>(13,60),(984,989)<|box_end|>"
+
+Step 5: vLLM → TRITON → CLIENT
+        HTTP: response as JSON with "text_output" field
+        gRPC: response as Protocol Buffer binary with "text_output" tensor
+```
+
+**Visual:**
+
+```
+CLIENT:                                     SERVER (vLLM backend):
+
+text_input: "...<|image_pad|>..."  ──────►  Tokenize text
+                                                │
+image: base64 JPEG  ─────────────────────►  Decode → Vision Encoder
+                                                │         │
+             Two separate inputs                │    Image embeddings
+                                                ▼         ▼
+                                          ┌─────────────────────────┐
+                                          │ Merge at <|image_pad|>  │
+                                          │ position in token       │
+                                          │ sequence                │
+                                          └────────────┬────────────┘
+                                                       │
+                                                       ▼
+                                                LLM generates
+                                                output text
+```
+
+**Key insight:** `<|image_pad|>` is a special **token**, not a string placeholder. The "replacement" happens at the **embedding level** inside the model's forward pass — the vision encoder converts image pixels into embedding vectors, and those vectors are inserted where `<|image_pad|>` was in the token sequence.
+
+**Response format depends on protocol:**
+
+| Protocol | Response format | How client parses |
+|----------|----------------|-------------------|
+| HTTP | JSON (`{"outputs": [{"name": "text_output", "data": [...]}]}`) | `response.json()["outputs"][0]["data"][0]` |
+| gRPC | Protocol Buffer binary (tensor) | `response.as_numpy("text_output")[0].decode()` |
+
+The model output (text) is the same either way — only the transport format differs.
+
+---
+
+## Q36: Where should Triton scripts live — `scripts/` or `triton_model_repository/`?
+
+A:
+Keep **client/orchestration scripts in `scripts/`**, and keep **`triton_model_repository/` clean** for Triton’s model configs only.
+
+**Why:**
+- Triton expects a strict repo structure (`model_name/config.pbtxt`, `model_name/1/model.json`). Extra files can confuse deployment.
+- Scripts are for **clients and ops**, not for the server to read.
+- You typically mount **only** the model repo + weights into the Triton container.
+
+**Recommended:**
+- `scripts/benchmark_triton.py`, `scripts/validate_triton_accuracy.py`, `scripts/deploy_triton.sh` → stay in `scripts/`.
+- `triton_model_repository/` → only configs + versioned model folders.

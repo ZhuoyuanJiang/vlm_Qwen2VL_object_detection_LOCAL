@@ -14,12 +14,22 @@ Usage:
 
     # Compare both models
     python benchmark_triton.py --model qwen2vl_nutrition_bf16 qwen2vl_nutrition_gptq_int4
+
+    # Higher concurrency (true async HTTP)
+    python benchmark_triton.py --endpoint http --concurrency 20
+
+    # Higher concurrency (true async gRPC)
+    python benchmark_triton.py --endpoint grpc --concurrency 20
+
+    # If processor files aren't cached locally, point to a local model path
+    QWEN2VL_PROCESSOR_PATH=/path/to/merged/model python benchmark_triton.py --endpoint http
 """
 
 import argparse
 import asyncio
 import base64
 import json
+import os
 import time
 from functools import lru_cache
 from dataclasses import dataclass, asdict
@@ -27,7 +37,8 @@ from pathlib import Path
 from typing import Optional
 import io
 
-import requests
+import aiohttp
+import numpy as np
 from PIL import Image
 
 # Optional: gRPC support
@@ -85,6 +96,35 @@ class BenchmarkSummary:
 
 DATASET_ID = "openfoodfacts/nutrition-table-detection"
 
+# Training prompts (from src/data/dataset.py)
+TRAINING_SYSTEM_PROMPT = """You are a Vision Language Model specialized in interpreting visual data from product images.
+Your task is to analyze the provided product images and detect the nutrition tables in a certain format.
+Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
+TRAINING_USER_PROMPT = "Detect the bounding box of the nutrition table."
+
+PROCESSOR_ENV_VAR = "QWEN2VL_PROCESSOR_PATH"
+DEFAULT_PROCESSOR_ID = "Qwen/Qwen2-VL-7B-Instruct"
+
+
+@lru_cache(maxsize=1)
+def _load_processor():
+    try:
+        from transformers import Qwen2VLProcessor
+    except Exception as e:
+        raise RuntimeError(
+            "Missing dependency: transformers. Install it to use chat templates."
+        ) from e
+
+    model_id = os.getenv(PROCESSOR_ENV_VAR, DEFAULT_PROCESSOR_ID)
+    try:
+        return Qwen2VLProcessor.from_pretrained(model_id)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load Qwen2VLProcessor from '{model_id}'. "
+            f"Set {PROCESSOR_ENV_VAR} to a local model path."
+        ) from e
+
+
 @lru_cache(maxsize=1)
 def _load_test_dataset():
     """Load evaluation dataset split once (prefer 'val', fall back to 'validation')."""
@@ -96,8 +136,8 @@ def _load_test_dataset():
         return load_dataset(DATASET_ID, split="validation")
 
 
-def load_test_image(image_index: int = 0) -> str:
-    """Load a test image and return as base64 string."""
+def load_test_image(image_index: int = 0) -> tuple[Image.Image, str]:
+    """Load a test image and return (PIL image, base64 string)."""
     # Use the same dataset and split as evaluate_vllm_accuracy.py
     dataset = _load_test_dataset()
     image = dataset[image_index % len(dataset)]["image"]
@@ -105,7 +145,35 @@ def load_test_image(image_index: int = 0) -> str:
     # Convert to base64
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG")
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    image_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return image, image_b64
+
+
+def build_chat_template_prompt(
+    image: Image.Image,
+    system_prompt: str = TRAINING_SYSTEM_PROMPT,
+    user_prompt: str = TRAINING_USER_PROMPT,
+) -> str:
+    """Build the text_input using Qwen2-VL's chat template (matches training)."""
+    processor = _load_processor()
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": system_prompt}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": user_prompt},
+            ],
+        },
+    ]
+    return processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
 
 def create_http_payload(text_input: str, image_b64: str, temperature: float = 0.0, max_tokens: int = 100) -> dict:
@@ -155,42 +223,43 @@ def create_http_payload(text_input: str, image_b64: str, temperature: float = 0.
 
 
 async def benchmark_http_request(
-    session: requests.Session,
+    session: aiohttp.ClientSession,
     url: str,
     payload: dict,
     request_id: int
 ) -> BenchmarkResult:
-    """Send a single HTTP inference request."""
+    """Send a single HTTP inference request (async)."""
     start_time = time.perf_counter()
     try:
-        response = session.post(url, json=payload, timeout=60)
-        latency_ms = (time.perf_counter() - start_time) * 1000
+        async with session.post(url, json=payload) as response:
+            latency_ms = (time.perf_counter() - start_time) * 1000
 
-        if response.status_code == 200:
-            result = response.json()
-            # Extract text output from Triton response
-            outputs = result.get("outputs", [])
-            text_output = None
-            for output in outputs:
-                if output.get("name") == "text_output":
-                    text_output = output.get("data", [None])[0]
-                    break
+            if response.status == 200:
+                result = await response.json()
+                # Extract text output from Triton response
+                outputs = result.get("outputs", [])
+                text_output = None
+                for output in outputs:
+                    if output.get("name") == "text_output":
+                        text_output = output.get("data", [None])[0]
+                        break
 
-            return BenchmarkResult(
-                request_id=request_id,
-                success=True,
-                latency_ms=latency_ms,
-                output=text_output,
-                error=None
-            )
-        else:
-            return BenchmarkResult(
-                request_id=request_id,
-                success=False,
-                latency_ms=latency_ms,
-                output=None,
-                error=f"HTTP {response.status_code}: {response.text[:200]}"
-            )
+                return BenchmarkResult(
+                    request_id=request_id,
+                    success=True,
+                    latency_ms=latency_ms,
+                    output=text_output,
+                    error=None
+                )
+            else:
+                body = await response.text()
+                return BenchmarkResult(
+                    request_id=request_id,
+                    success=False,
+                    latency_ms=latency_ms,
+                    output=None,
+                    error=f"HTTP {response.status}: {body[:200]}"
+                )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return BenchmarkResult(
@@ -202,17 +271,22 @@ async def benchmark_http_request(
         )
 
 
-async def run_http_benchmark(config: BenchmarkConfig, images: list[str], prompt: str) -> list[BenchmarkResult]:
-    """Run HTTP benchmark with specified concurrency."""
+async def run_http_benchmark(
+    config: BenchmarkConfig,
+    images: list[tuple[Image.Image, str]],
+    prompt: str,
+) -> list[BenchmarkResult]:
+    """Run HTTP benchmark with specified concurrency (true async)."""
     url = f"{config.http_url}/v2/models/{config.model_name}/infer"
-    session = requests.Session()
+    connector = aiohttp.TCPConnector(limit=config.concurrency)
+    timeout = aiohttp.ClientTimeout(total=60)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
-    results = []
     semaphore = asyncio.Semaphore(config.concurrency)
 
     async def bounded_request(request_id: int):
         async with semaphore:
-            image_b64 = images[request_id % len(images)] if config.vary_images else images[0]
+            image_b64 = images[request_id % len(images)][1] if config.vary_images else images[0][1]
             payload = create_http_payload(prompt, image_b64)
             return await benchmark_http_request(session, url, payload, request_id)
 
@@ -223,70 +297,77 @@ async def run_http_benchmark(config: BenchmarkConfig, images: list[str], prompt:
     print(f"Running {config.num_requests} HTTP requests with concurrency={config.concurrency}...")
     results = await asyncio.gather(*tasks)
 
-    session.close()
+    await session.close()
     return results
 
 
-def run_grpc_benchmark(config: BenchmarkConfig, images: list[str], prompt: str) -> list[BenchmarkResult]:
-    """Run gRPC benchmark."""
+async def run_grpc_benchmark(
+    config: BenchmarkConfig,
+    images: list[tuple[Image.Image, str]],
+    prompt: str,
+) -> list[BenchmarkResult]:
+    """Run gRPC benchmark with async client + concurrency."""
     if not GRPC_AVAILABLE:
         print("gRPC not available. Install tritonclient[all].")
         return []
 
-    results = []
-
     try:
-        client = grpcclient.InferenceServerClient(url=config.grpc_url)
+        client = grpcclient_aio.InferenceServerClient(url=config.grpc_url)
+        semaphore = asyncio.Semaphore(config.concurrency)
 
-        for i in range(config.num_requests):
-            image_b64 = images[i % len(images)] if config.vary_images else images[0]
+        async def bounded_request(request_id: int) -> BenchmarkResult:
+            async with semaphore:
+                image_b64 = images[request_id % len(images)][1] if config.vary_images else images[0][1]
 
-            # Prepare inputs
-            inputs = [
-                grpcclient.InferInput("text_input", [1], "BYTES"),
-                grpcclient.InferInput("image", [1], "BYTES"),
-                grpcclient.InferInput("sampling_parameters", [1], "BYTES"),
-                grpcclient.InferInput("stream", [1], "BOOL"),
-            ]
+                # Prepare inputs
+                inputs = [
+                    grpcclient_aio.InferInput("text_input", [1], "BYTES"),
+                    grpcclient_aio.InferInput("image", [1], "BYTES"),
+                    grpcclient_aio.InferInput("sampling_parameters", [1], "BYTES"),
+                    grpcclient_aio.InferInput("stream", [1], "BOOL"),
+                ]
 
-            inputs[0].set_data_from_numpy(np.array([prompt.encode()], dtype=np.object_))
-            inputs[1].set_data_from_numpy(np.array([image_b64.encode()], dtype=np.object_))
-            inputs[2].set_data_from_numpy(np.array([b'{"temperature": 0, "max_tokens": 100}'], dtype=np.object_))
-            inputs[3].set_data_from_numpy(np.array([False], dtype=np.bool_))
+                inputs[0].set_data_from_numpy(np.array([prompt.encode()], dtype=np.object_))
+                inputs[1].set_data_from_numpy(np.array([image_b64.encode()], dtype=np.object_))
+                inputs[2].set_data_from_numpy(np.array([b'{"temperature": 0, "max_tokens": 100}'], dtype=np.object_))
+                inputs[3].set_data_from_numpy(np.array([False], dtype=np.bool_))
 
-            outputs = [grpcclient.InferRequestedOutput("text_output")]
+                outputs = [grpcclient_aio.InferRequestedOutput("text_output")]
 
-            start_time = time.perf_counter()
-            try:
-                response = client.infer(config.model_name, inputs, outputs=outputs)
-                latency_ms = (time.perf_counter() - start_time) * 1000
+                start_time = time.perf_counter()
+                try:
+                    response = await client.infer(config.model_name, inputs, outputs=outputs)
+                    latency_ms = (time.perf_counter() - start_time) * 1000
 
-                text_output = response.as_numpy("text_output")[0].decode()
-                results.append(BenchmarkResult(
-                    request_id=i,
-                    success=True,
-                    latency_ms=latency_ms,
-                    output=text_output,
-                    error=None
-                ))
-            except Exception as e:
-                latency_ms = (time.perf_counter() - start_time) * 1000
-                results.append(BenchmarkResult(
-                    request_id=i,
-                    success=False,
-                    latency_ms=latency_ms,
-                    output=None,
-                    error=str(e)
-                ))
+                    text_output = response.as_numpy("text_output")[0].decode()
+                    return BenchmarkResult(
+                        request_id=request_id,
+                        success=True,
+                        latency_ms=latency_ms,
+                        output=text_output,
+                        error=None
+                    )
+                except Exception as e:
+                    latency_ms = (time.perf_counter() - start_time) * 1000
+                    return BenchmarkResult(
+                        request_id=request_id,
+                        success=False,
+                        latency_ms=latency_ms,
+                        output=None,
+                        error=str(e)
+                    )
 
-            if (i + 1) % 10 == 0:
-                print(f"  Completed {i + 1}/{config.num_requests} requests...")
+        tasks = [bounded_request(i) for i in range(config.num_requests)]
+        results = await asyncio.gather(*tasks)
 
-        client.close()
+        close_result = client.close()
+        if asyncio.iscoroutine(close_result):
+            await close_result
+
+        return results
     except Exception as e:
         print(f"gRPC benchmark failed: {e}")
-
-    return results
+        return []
 
 
 def calculate_summary(config: BenchmarkConfig, results: list[BenchmarkResult], total_time: float) -> BenchmarkSummary:
@@ -363,7 +444,6 @@ async def main():
                         help="Use different images for each request")
     parser.add_argument("--output", type=str, default=None,
                         help="Output JSON file path")
-
     args = parser.parse_args()
 
     # Load test images
@@ -372,8 +452,8 @@ async def main():
     images = [load_test_image(i) for i in range(min(num_images, 20))]
     print(f"Loaded {len(images)} test image(s)")
 
-    # Prompt for nutrition detection
-    prompt = "Detect the nutrition facts table in this image and return the bounding box coordinates."
+    # Prompt for nutrition detection (aligned with training via chat template)
+    prompt = build_chat_template_prompt(images[0][0])
 
     all_summaries = []
 
@@ -405,7 +485,7 @@ async def main():
             if endpoint == "http":
                 results = await run_http_benchmark(config, images, prompt)
             else:
-                results = run_grpc_benchmark(config, images, prompt)
+                results = await run_grpc_benchmark(config, images, prompt)
 
             total_time = time.perf_counter() - start_time
 
