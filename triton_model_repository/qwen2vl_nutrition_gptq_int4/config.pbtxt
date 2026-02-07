@@ -7,9 +7,9 @@
 #   tritonserver --model-repository=/path/to/triton_model_repository
 #
 # API Endpoint (VLM with image):
-#   POST /v2/models/qwen2vl_nutrition_gptq_int4/infer
+#   POST /v2/models/qwen2vl_nutrition_gptq_int4/generate
 #
-# NOTE: Use /infer endpoint (not /generate) for VLM with image input.
+# NOTE: Must use /generate (not /infer) because vLLM requires decoupled mode.
 
 name: "qwen2vl_nutrition_gptq_int4"
 backend: "vllm"
@@ -75,8 +75,7 @@ instance_group [
   {
     count: 1
     kind: KIND_MODEL
-    # Pin to GPU 1 (BF16 uses GPU 0)
-    gpus: [ 1 ]
+    # KIND_MODEL does not allow gpus specification — vLLM manages GPU placement internally
   }
 ]
 

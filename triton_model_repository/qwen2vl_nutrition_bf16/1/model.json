@@ -1,23 +1,13 @@
 {
-    "_comment": "vLLM Backend Configuration for Qwen2-VL Nutrition Detection (BF16 Baseline)",
-    "_comment2": "Full precision model for accuracy comparison",
-
     "model": "/models/qwen2vl-nutrition-detection-r4-joint-merged",
-
     "tokenizer_mode": "auto",
     "trust_remote_code": true,
-
     "dtype": "bfloat16",
-
     "tensor_parallel_size": 1,
     "gpu_memory_utilization": 0.9,
-
     "max_model_len": 4096,
-
     "limit_mm_per_prompt": {
         "image": 1
     },
-
-    "disable_log_stats": false,
-    "disable_log_requests": false
+    "enable_prefix_caching": false
 }

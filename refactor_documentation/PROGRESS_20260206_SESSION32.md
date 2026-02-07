@@ -119,87 +119,33 @@ rsync -avz --progress -e "ssh -p ${PORT}" ${SCRIPTS_LOCAL}/{deploy_triton.sh,ben
 
 ---
 
-## Step 2: Fix Configs for Cloud Server
+## Step 2: Update Model Paths for Cloud Server
+
+The repo configs (`config.pbtxt` and `model.json`) are deployment-ready — no broken fields to fix. The only change needed is updating the model paths in `model.json` to match where weights are placed on the cloud server.
 
 Run on the **cloud server**:
 
-### 2a. Remove `gpus` lines from `config.pbtxt`
-
-The original configs used `gpus: [0]` / `gpus: [1]` for dual-GPU A/B testing. However, **`KIND_MODEL` does not allow `gpus` specification** — vLLM manages GPU placement internally. Specifying GPUs with `KIND_MODEL` causes Triton to fail with:
-
-> `Invalid argument: instance group ... has kind KIND_MODEL but specifies one or more GPUs`
-
 ```bash
-# Remove gpus lines from both configs
-sed -i '/gpus:/d' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/config.pbtxt
-sed -i '/gpus:/d' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/config.pbtxt
-```
-
-### 2b. Remove `_comment` fields from `model.json`
-
-Triton's vLLM backend passes **all** keys in `model.json` directly to `AsyncEngineArgs`. JSON doesn't support comments, and `_comment` fields cause:
-
-> `AsyncEngineArgs.__init__() got an unexpected keyword argument '_comment'`
-
-```bash
-sed -i '/_comment/d' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json
-sed -i '/_comment/d' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json
-```
-
-### 2c. Remove `disable_log_stats` and `disable_log_requests` from `model.json`
-
-These are **server-level flags**, not `AsyncEngineArgs` parameters. Including them causes:
-
-> `AsyncEngineArgs.__init__() got an unexpected keyword argument 'disable_log_requests'`
-
-```bash
-# Use python to cleanly remove both keys from both files
-python3 -c "
-import json
-for path in [
-    '/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json',
-    '/workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json',
-]:
-    with open(path) as f: d = json.load(f)
-    d.pop('disable_log_stats', None)
-    d.pop('disable_log_requests', None)
-    with open(path, 'w') as f: json.dump(d, f, indent=4)
-"
-```
-
-### 2d. Update `model.json` paths
-
-Update model paths to match where weights were placed on the cloud server:
-
-```bash
-# GPTQ model.json
+# GPTQ model.json: update model path
 sed -i 's|/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4|/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4|' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json
 
-# BF16 model.json
+# BF16 model.json: update model path
 sed -i 's|/models/qwen2vl-nutrition-detection-r4-joint-merged|/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged|' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json
 ```
 
-### Final `model.json` (GPTQ INT4)
+<details>
+<summary>Historical: config issues we encountered and fixed in the repo (for reference)</summary>
 
-After all fixes, the GPTQ `model.json` should look like:
+These issues existed in earlier versions of the repo configs and have since been fixed. Documented here for learning purposes:
 
-```json
-{
-    "model": "/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4",
-    "tokenizer_mode": "auto",
-    "trust_remote_code": true,
-    "dtype": "half",
-    "quantization": "gptq_marlin",
-    "tensor_parallel_size": 1,
-    "gpu_memory_utilization": 0.9,
-    "max_model_len": 4096,
-    "limit_mm_per_prompt": {
-        "image": 1
-    }
-}
-```
+1. **`gpus` in `config.pbtxt`**: `KIND_MODEL` does not allow `gpus` specification — vLLM manages GPU placement internally. Error: `Invalid argument: instance group ... has kind KIND_MODEL but specifies one or more GPUs`
 
-**Rule of thumb**: Only include keys that are valid `AsyncEngineArgs` parameters. No comments, no server-level flags.
+2. **`_comment` fields in `model.json`**: Triton passes **all** keys to `AsyncEngineArgs`. JSON has no comment syntax, and `_comment` is not a valid engine argument. Error: `AsyncEngineArgs.__init__() got an unexpected keyword argument '_comment'`
+
+3. **`disable_log_stats`/`disable_log_requests` in `model.json`**: These are server-level flags (for `vllm serve`), not `AsyncEngineArgs` parameters. Error: `AsyncEngineArgs.__init__() got an unexpected keyword argument 'disable_log_requests'`
+
+**Rule of thumb**: `model.json` must only contain valid `AsyncEngineArgs` parameters. No comments, no server-level flags.
+</details>
 
 ---
 
@@ -738,32 +684,10 @@ rsync -avz --progress -e "ssh -p ${PORT}" ~/projects/vlm_Qwen2VL_object_detectio
 rsync -avz --progress -e "ssh -p ${PORT}" ~/projects/vlm_Qwen2VL_object_detection/requirements_triton_benchmark.txt ${REMOTE}:/workspace/scripts/
 ```
 
-### On Cloud Server: Fix configs
+### On Cloud Server: Update model paths
 
 ```bash
-# Remove gpus lines (KIND_MODEL doesn't allow GPU specification)
-sed -i '/gpus:/d' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/config.pbtxt
-sed -i '/gpus:/d' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/config.pbtxt
-
-# Remove _comment fields (model.json passes ALL keys to AsyncEngineArgs)
-sed -i '/_comment/d' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json
-sed -i '/_comment/d' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json
-
-# Remove server-level flags and update paths
-python3 -c "
-import json
-for path in [
-    '/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json',
-    '/workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json',
-]:
-    with open(path) as f: d = json.load(f)
-    d.pop('disable_log_stats', None)
-    d.pop('disable_log_requests', None)
-    d.pop('enforce_eager', None)
-    with open(path, 'w') as f: json.dump(d, f, indent=4)
-"
-
-# Update model paths to cloud locations
+# Update model paths to match cloud server locations
 sed -i 's|/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4|/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4|' /workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json
 sed -i 's|/models/qwen2vl-nutrition-detection-r4-joint-merged|/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged|' /workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json
 ```
@@ -775,18 +699,6 @@ docker pull nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3
 
 # Install benchmark client dependencies (CPU torch is sufficient)
 pip install -r /workspace/scripts/requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-### On Cloud Server: Disable prefix caching for unbiased benchmarks
-
-```bash
-python3 -c "
-import json
-for path in ['/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json', '/workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json']:
-    with open(path) as f: d = json.load(f)
-    d['enable_prefix_caching'] = False
-    with open(path, 'w') as f: json.dump(d, f, indent=4)
-"
 ```
 
 ### On Cloud Server: GPTQ INT4 Benchmark

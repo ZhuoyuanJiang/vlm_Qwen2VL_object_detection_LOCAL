@@ -51,8 +51,7 @@ instance_group [
   {
     count: 1
     kind: KIND_MODEL
-    # Pin to GPU 0 (GPTQ will use GPU 1)
-    gpus: [ 0 ]
+    # KIND_MODEL does not allow gpus specification — vLLM manages GPU placement internally
   }
 ]
 
