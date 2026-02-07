@@ -61,8 +61,13 @@ from IPython.display import display, Markdown
 # Configuration
 VLLM_HOST = "localhost"
 VLLM_PORT = 8000
+BENCHMARK_VARY_IMAGES = False  # False = same image (prefix-cache-friendly), True = different images (production-like)
+SCENARIO_LABEL = "Different images (production-like)" if BENCHMARK_VARY_IMAGES else "Same image (prefix-cache-friendly)"
 
 print(f"vLLM server: http://{VLLM_HOST}:{VLLM_PORT}")
+print(f"Benchmark scenario: {SCENARIO_LABEL}")
+if not BENCHMARK_VARY_IMAGES:
+    print("⚠️ Note: same-image mode may overstate production throughput due to prefix caching.")
 
 # %% [markdown]
 # ## 2. Check Server Health
@@ -201,7 +206,20 @@ print(f"KV cache usage:   {metrics['kv_cache_usage']:.1%}")
 # Let's break down what these numbers mean:
 
 # %%
-display(Markdown(f"""
+if metrics['total_requests'] == 0:
+    display(Markdown("""
+### Metrics Interpretation
+
+No requests have been processed yet (server just started). This section shows cumulative
+metrics from the `/metrics` endpoint — it will have meaningful data if you re-run after
+the benchmarks below, or if the server already has traffic.
+
+**Skip ahead to Section 5 for benchmark results.**
+"""))
+else:
+    tpot_tps = f"~{1000/metrics['avg_tpot_ms']:.0f}" if metrics['avg_tpot_ms'] > 0 else "N/A"
+
+    display(Markdown(f"""
 ### Metrics Interpretation
 
 Based on **{metrics['total_requests']} requests** processed so far:
@@ -209,7 +227,7 @@ Based on **{metrics['total_requests']} requests** processed so far:
 | Metric | Value | Interpretation |
 |--------|-------|----------------|
 | **TTFT** | {metrics['avg_ttft_ms']:.1f} ms | Time until first token. Dominated by **prefill** (processing prompt + populating KV cache) |
-| **TPOT** | {metrics['avg_tpot_ms']:.1f} ms | Time per output token. Reflects **decode speed** (~{1000/metrics['avg_tpot_ms']:.0f} tokens/sec if TPOT > 0) |
+| **TPOT** | {metrics['avg_tpot_ms']:.1f} ms | Time per output token. Reflects **decode speed** ({tpot_tps} tokens/sec) |
 | **E2E** | {metrics['avg_e2e_ms']:.1f} ms | Total request time. E2E ≈ TTFT + (num_output_tokens × TPOT) |
 | **Prefill** | {metrics['avg_prefill_ms']:.1f} ms | Actual prefill computation time |
 | **Decode** | {metrics['avg_decode_ms']:.1f} ms | Actual decode computation time |
@@ -242,17 +260,25 @@ from scripts.benchmark_vllm import run_benchmark, get_metrics_snapshot
 # ### Experiment 1: Baseline (Single Request)
 #
 # First, let's establish a baseline with sequential requests (concurrency=1).
+# This notebook defaults to SAME-IMAGE mode unless `BENCHMARK_VARY_IMAGES=True`.
 
 # %%
 # Run baseline benchmark
 print("Running Experiment 1: Baseline (concurrency=1)")
 print("-" * 50)
-baseline_results = run_benchmark(num_requests=10, concurrency=1, verbose=True)
+baseline_results = run_benchmark(
+    num_requests=10,
+    concurrency=1,
+    vary_images=BENCHMARK_VARY_IMAGES,
+    verbose=True,
+)
 
 # %%
 # Store results for comparison
 all_results = []
 all_results.append({
+    "scenario": SCENARIO_LABEL,
+    "vary_images": BENCHMARK_VARY_IMAGES,
     "concurrency": 1,
     "num_requests": 10,
     **baseline_results["summary"],
@@ -275,9 +301,16 @@ for conc in concurrency_levels[1:]:  # Skip 1, we already did it
     print(f"Running benchmark with concurrency={conc}")
     print("=" * 60)
 
-    results = run_benchmark(num_requests=20, concurrency=conc, verbose=True)
+    results = run_benchmark(
+        num_requests=20,
+        concurrency=conc,
+        vary_images=BENCHMARK_VARY_IMAGES,
+        verbose=True,
+    )
 
     all_results.append({
+        "scenario": SCENARIO_LABEL,
+        "vary_images": BENCHMARK_VARY_IMAGES,
         "concurrency": conc,
         "num_requests": 20,
         **results["summary"],
@@ -295,12 +328,13 @@ df = pd.DataFrame(all_results)
 # Display results table
 print("\nBenchmark Results Summary")
 print("=" * 80)
+print(f"Scenario: {SCENARIO_LABEL}")
 
 # Check if avg_itl_ms exists (may not in older runs)
-cols_to_show = ["concurrency", "num_requests", "successful_requests", "throughput_rps",
+cols_to_show = ["scenario", "concurrency", "num_requests", "successful_requests", "throughput_rps",
                 "avg_ttft_ms", "avg_tpot_ms", "avg_e2e_ms", "avg_latency_ms"]
 if "avg_itl_ms" in df.columns:
-    cols_to_show.insert(6, "avg_itl_ms")  # Add ITL after TPOT
+    cols_to_show.insert(7, "avg_itl_ms")  # Add ITL after TPOT
 
 display(df[cols_to_show].round(2))
 
@@ -393,8 +427,12 @@ print("\nPlot saved to: /tmp/vllm_prefill_decode_breakdown.png")
 baseline = df[df["concurrency"] == 1].iloc[0] if len(df[df["concurrency"] == 1]) > 0 else df.iloc[0]
 max_conc = df[df["concurrency"] == df["concurrency"].max()].iloc[0]
 
+baseline_tps = f"~{1000/baseline['avg_tpot_ms']:.0f}" if baseline['avg_tpot_ms'] > 0 else "N/A"
+
 display(Markdown(f"""
-## Summary for Mentor
+## Summary
+
+**Scenario measured:** {SCENARIO_LABEL}
 
 ### Baseline Performance (concurrency=1)
 - **TTFT**: {baseline['avg_ttft_ms']:.1f} ms (time to first token)
@@ -411,7 +449,7 @@ display(Markdown(f"""
 
 1. **Prefill dominates TTFT**: For VLMs with image input, prefill time is significant due to image processing
 
-2. **Decode is fast**: Output tokens are generated quickly (~{1000/baseline['avg_tpot_ms']:.0f} tokens/sec) because:
+2. **Decode is fast**: Output tokens are generated quickly ({baseline_tps} tokens/sec) because:
    - Our bbox output is short (~22 tokens)
    - KV cache reuse makes decode efficient
 
@@ -420,9 +458,13 @@ display(Markdown(f"""
    - But also → Higher per-request latency
    - vLLM batches tokens across concurrent requests
 
-### How to Report to Mentor
+4. **Interpretation warning**:
+   - If scenario is **Same image (prefix-cache-friendly)**, throughput/latency can look better than production.
+   - For production-like numbers, rerun with `BENCHMARK_VARY_IMAGES=True`.
 
-> "At concurrency={int(baseline['concurrency'])}, our model achieves {baseline['avg_ttft_ms']:.0f}ms TTFT and {baseline['avg_e2e_ms']:.0f}ms E2E latency.
+### How to Report
+
+> "In the **{SCENARIO_LABEL}** scenario, at concurrency={int(baseline['concurrency'])}, our model achieves {baseline['avg_ttft_ms']:.0f}ms TTFT and {baseline['avg_e2e_ms']:.0f}ms E2E latency.
 > At concurrency={int(max_conc['concurrency'])}, throughput increases to {max_conc['throughput_rps']:.2f} req/s
 > ({max_conc['throughput_rps']/baseline['throughput_rps']:.1f}x baseline)."
 """))
@@ -435,6 +477,7 @@ display(Markdown(f"""
 results_file = "/home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/refactor_documentation/vllm_benchmark_results.csv"
 df.to_csv(results_file, index=False)
 print(f"Results saved to: {results_file}")
+print(f"Scenario saved: {SCENARIO_LABEL}")
 
 # Save as JSON too
 json_file = "/home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/refactor_documentation/vllm_benchmark_results.json"
