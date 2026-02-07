@@ -461,3 +461,202 @@ python scripts/benchmark_vllm.py --num-requests 20 --concurrency 8 --vary-images
 # Monitor KV cache during benchmark
 watch -n 0.5 'curl -s http://localhost:8000/metrics | grep -E "kv_cache|num_requests"'
 ```
+
+---
+
+## Appendix: Commands to Reproduce Experiments (In Order)
+
+This appendix gives a simple, reproducible command sequence for Session 28.
+
+### 0) Setup
+
+Use separate terminals and environments to avoid confusion:
+
+- **Terminal A**: vLLM server (`vllm serve`)
+- **Terminal B**: vLLM benchmark client (`benchmark_vllm.py`)
+- **Terminal C**: HuggingFace baseline (`benchmark_hf_baseline.py`)
+
+### 0.1) Common shell init (run in every terminal)
+
+```bash
+cd /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection
+source ~/miniconda3/etc/profile.d/conda.sh
+```
+
+### 0.2) Environment for HuggingFace benchmark (Terminal C)
+
+Use this env for `scripts/benchmark_hf_baseline.py`:
+```bash
+conda activate vlm_Qwen2VL_object_detection
+```
+
+Reason:
+- This env includes `flash_attn` in our setup.
+- If you run HF benchmark in the vLLM serving env, you may see:
+  `ImportError: FlashAttention2 ... flash_attn seems to be not installed`.
+
+### 0.3) Environment for vLLM server + vLLM benchmark (Terminal A/B)
+
+Use this env for `vllm serve` and `scripts/benchmark_vllm.py`:
+```bash
+conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+```
+
+### 0.4) Optional output directory (recommended)
+
+```bash
+OUT_DIR=/ssd1/zhuoyuan/vlm_outputs/session28_repro_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$OUT_DIR"
+```
+
+Notes:
+- `mkdir -p "$OUT_DIR"` only creates a folder to organize JSON outputs.
+- If you do not use `--output`, you can skip this.
+- If you do use `--output`, make sure `OUT_DIR` is set in the current terminal session before running commands.
+
+### 0.5) Critical compatibility notes
+
+- `scripts/benchmark_vllm.py` sends `model="qwen2vl-nutrition"` internally.
+- For any vLLM server used with this script, keep `--served-model-name qwen2vl-nutrition`.
+- `vllm serve` runs in foreground; keep it in Terminal A and run benchmark commands from another terminal.
+
+### 1) Experiment 1 - HuggingFace Baseline
+
+Batch-size effect (corrected true batching):
+```bash
+CUDA_VISIBLE_DEVICES=1 python scripts/benchmark_hf_baseline.py --batch-size 1 --num-images 8 --warmup 3 --output "$OUT_DIR/exp1A_bs1_n8.json"
+CUDA_VISIBLE_DEVICES=1 python scripts/benchmark_hf_baseline.py --batch-size 4 --num-images 8 --warmup 3 --output "$OUT_DIR/exp1A_bs4_n8.json"
+CUDA_VISIBLE_DEVICES=1 python scripts/benchmark_hf_baseline.py --batch-size 8 --num-images 8 --warmup 3 --output "$OUT_DIR/exp1A_bs8_n8.json"
+```
+
+Standard benchmark:
+```bash
+CUDA_VISIBLE_DEVICES=1 python scripts/benchmark_hf_baseline.py --batch-size 1 --num-images 20 --warmup 3 --output "$OUT_DIR/exp1C_bs1_n20.json"
+```
+
+### 2) Start vLLM Server (Default 0.9 memory)
+
+Use one terminal for server logs:
+```bash
+# Activate vLLM serving environment in this terminal
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+
+CUDA_VISIBLE_DEVICES=0 vllm serve \
+  /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged \
+  --served-model-name qwen2vl-nutrition \
+  --dtype bfloat16 \
+  --trust-remote-code \
+  --max-model-len 4096 \
+  --limit-mm-per-prompt '{"image":1}' \
+  --gpu-memory-utilization 0.9 \
+  --port 8000
+```
+
+In another terminal, verify server:
+```bash
+curl -s http://localhost:8000/health
+```
+
+### 3) Experiment 2 - vLLM Same Image (Prefix Caching)
+
+Cold start (restart server first, then run immediately):
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 10 --concurrency 1 --output "$OUT_DIR/exp2A_cold_same_c1.json"
+```
+
+Cold start c=8 (restart server first, then run immediately):
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 16 --concurrency 8 --output "$OUT_DIR/exp2B_cold_same_c8.json"
+```
+
+Warmed-up runs:
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 1 --output "$OUT_DIR/exp2C_warm_same_c1_run1.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 10 --concurrency 1 --output "$OUT_DIR/exp2C_warm_same_c1_run2.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 1 --output "$OUT_DIR/exp2C_warm_same_c1_run3.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --output "$OUT_DIR/exp2D_warm_same_c8.json"
+```
+
+### 4) Experiment 3 - vLLM Different Images (Realistic)
+
+Cold start c=1 (restart server first):
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 10 --concurrency 1 --vary-images --output "$OUT_DIR/exp3A_cold_diff_c1.json"
+```
+
+Cold start c=8 (restart server first):
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 16 --concurrency 8 --vary-images --output "$OUT_DIR/exp3B_cold_diff_c8.json"
+```
+
+Warmed-up runs:
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 10 --concurrency 1 --vary-images --output "$OUT_DIR/exp3C_warm_diff_c1.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images --output "$OUT_DIR/exp3D_warm_diff_c8.json"
+```
+
+### 5) Experiment 4 - Concurrency Sweep (Different Images)
+
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 10 --concurrency 1 --vary-images --output "$OUT_DIR/exp4_c1.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images --output "$OUT_DIR/exp4_c8.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 32 --concurrency 16 --vary-images --output "$OUT_DIR/exp4_c16.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 64 --concurrency 32 --vary-images --output "$OUT_DIR/exp4_c32.json"
+```
+
+### 6) Experiment 6 - High Concurrency Stress
+
+```bash
+python scripts/benchmark_vllm.py --port 8000 --num-requests 64 --concurrency 32 --vary-images --output "$OUT_DIR/exp6_c32.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 80 --concurrency 48 --vary-images --output "$OUT_DIR/exp6_c48.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 100 --concurrency 64 --vary-images --output "$OUT_DIR/exp6_c64.json"
+python scripts/benchmark_vllm.py --port 8000 --num-requests 100 --concurrency 80 --vary-images --output "$OUT_DIR/exp6_c80.json"
+```
+
+### 7) Experiment 5 - GPU Memory Utilization
+
+0.8 memory (use another GPU/port, no need to stop 8000 server):
+```bash
+CUDA_VISIBLE_DEVICES=1 vllm serve \
+  /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged \
+  --served-model-name qwen2vl-nutrition \
+  --dtype bfloat16 \
+  --trust-remote-code \
+  --max-model-len 4096 \
+  --limit-mm-per-prompt '{"image":1}' \
+  --gpu-memory-utilization 0.8 \
+  --port 8001
+```
+
+Optional benchmark against 0.8 server:
+```bash
+python scripts/benchmark_vllm.py --port 8001 --num-requests 20 --concurrency 8 --vary-images --output "$OUT_DIR/exp5_mem08_c8_diff.json"
+```
+
+0.7 memory expected failure:
+```bash
+CUDA_VISIBLE_DEVICES=2 vllm serve \
+  /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged \
+  --served-model-name qwen2vl-nutrition \
+  --dtype bfloat16 \
+  --trust-remote-code \
+  --max-model-len 4096 \
+  --limit-mm-per-prompt '{"image":1}' \
+  --gpu-memory-utilization 0.7 \
+  --port 8002
+```
+
+### 8) Quick Monitoring During Any vLLM Test
+
+```bash
+watch -n 0.5 'curl -s http://localhost:8000/metrics | grep -E "kv_cache|num_requests|time_to_first_token|e2e_request_latency"'
+```
+
+### 9) Optional Parallel Shortcut (Simpler Version)
+
+If you want fewer restarts, run two servers in parallel:
+- GPU 0 / port 8000 for 0.9-memory experiments
+- GPU 1 / port 8001 for 0.8-memory experiments
+
+Then run benchmarks sequentially by changing only `--port`.
