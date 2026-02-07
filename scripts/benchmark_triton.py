@@ -178,47 +178,24 @@ def build_chat_template_prompt(
 
 def create_http_payload(text_input: str, image_b64: str, temperature: float = 0.0, max_tokens: int = 100) -> dict:
     """
-    Create HTTP inference request payload for Triton.
+    Create HTTP request payload for Triton's /generate endpoint.
 
-    IMPORTANT: The input names, shapes, and datatypes here MUST match the
-    config.pbtxt in your Triton model repository. If they don't match,
-    Triton will reject the request with a validation error.
+    The /generate endpoint uses a flat JSON format (not the structured /infer format).
+    This is required because the vLLM backend uses decoupled transaction policy
+    (model_transaction_policy { decoupled: true }) for streaming support, and the
+    /infer endpoint doesn't support decoupled models.
 
-    Expected config.pbtxt inputs:
-        input { name: "text_input"           data_type: TYPE_STRING dims: [1] }
-        input { name: "image"                data_type: TYPE_STRING dims: [1] }
-        input { name: "sampling_parameters"  data_type: TYPE_STRING dims: [1] optional: true }
-        input { name: "stream"               data_type: TYPE_BOOL   dims: [1] optional: true }
-
-    Mapping: config.pbtxt TYPE_STRING -> HTTP "BYTES" datatype
+    The /generate endpoint accepts the same input names as config.pbtxt but in a
+    flat key-value format, plus sampling parameters as top-level keys.
     """
     return {
-        "inputs": [
-            {
-                "name": "text_input",       # Must match config.pbtxt input name
-                "shape": [1],               # Must match config.pbtxt dims
-                "datatype": "BYTES",        # TYPE_STRING in pbtxt = BYTES in HTTP
-                "data": [text_input]
-            },
-            {
-                "name": "image",            # Must match config.pbtxt input name
-                "shape": [1],
-                "datatype": "BYTES",
-                "data": [image_b64]         # Base64-encoded image
-            },
-            {
-                "name": "sampling_parameters",
-                "shape": [1],
-                "datatype": "BYTES",
-                "data": [json.dumps({"temperature": temperature, "max_tokens": max_tokens})]
-            },
-            {
-                "name": "stream",           # Controls output streaming
-                "shape": [1],
-                "datatype": "BOOL",         # TYPE_BOOL in pbtxt = BOOL in HTTP
-                "data": [False]             # False = return complete response
-            }
-        ]
+        "text_input": text_input,
+        "image": image_b64,
+        "parameters": {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False
+        }
     }
 
 
@@ -236,13 +213,8 @@ async def benchmark_http_request(
 
             if response.status == 200:
                 result = await response.json()
-                # Extract text output from Triton response
-                outputs = result.get("outputs", [])
-                text_output = None
-                for output in outputs:
-                    if output.get("name") == "text_output":
-                        text_output = output.get("data", [None])[0]
-                        break
+                # /generate endpoint returns {"text_output": "...", ...}
+                text_output = result.get("text_output")
 
                 return BenchmarkResult(
                     request_id=request_id,
@@ -277,9 +249,9 @@ async def run_http_benchmark(
     prompt: str,
 ) -> list[BenchmarkResult]:
     """Run HTTP benchmark with specified concurrency (true async)."""
-    url = f"{config.http_url}/v2/models/{config.model_name}/infer"
+    url = f"{config.http_url}/v2/models/{config.model_name}/generate"
     connector = aiohttp.TCPConnector(limit=config.concurrency)
-    timeout = aiohttp.ClientTimeout(total=60)
+    timeout = aiohttp.ClientTimeout(total=300)
     session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
     semaphore = asyncio.Semaphore(config.concurrency)

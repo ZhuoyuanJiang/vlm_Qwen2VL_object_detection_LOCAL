@@ -1,0 +1,29 @@
+# Requirements for running Triton benchmark scripts on a host machine.
+#
+# These are the CLIENT-SIDE dependencies only — the Triton Docker container
+# handles model inference with its own environment. The host just needs
+# enough to build prompts (tokenizer/processor) and send HTTP/gRPC requests.
+#
+# Usage:
+#   pip install -r requirements_triton_benchmark.txt
+#
+# For CPU-only torch (smaller download, sufficient for tokenizer/processor):
+#   pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# Version pins are based on environment_vllm_serving.yml (known-good versions).
+
+# HTTP/gRPC client
+aiohttp>=3.9.0
+tritonclient[all]>=2.40.0
+
+# Tokenizer and processor (needed for prompt construction via apply_chat_template)
+transformers>=4.45,<5.0    # transformers 5.x has bugs with Qwen2VLProcessor
+torch>=2.0.0               # CPU-only is sufficient; use --extra-index-url for CPU wheel
+torchvision>=0.15.0        # Required by Qwen2VLProcessor for image processing
+jinja2>=3.1.0              # Required by apply_chat_template()
+
+# Image handling and dataset loading
+Pillow>=10.0.0
+numpy>=1.24.0
+datasets>=2.14.0
+qwen-vl-utils>=0.0.8
