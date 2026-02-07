@@ -1725,3 +1725,162 @@ Keep **client/orchestration scripts in `scripts/`**, and keep **`triton_model_re
 **Recommended:**
 - `scripts/benchmark_triton.py`, `scripts/validate_triton_accuracy.py`, `scripts/deploy_triton.sh` → stay in `scripts/`.
 - `triton_model_repository/` → only configs + versioned model folders.
+
+---
+
+## Q37: What does each field in `model.json` mean?
+
+A:
+
+Every key in `model.json` gets passed directly to vLLM's `AsyncEngineArgs`. Only valid `AsyncEngineArgs` parameters are allowed — no comments, no server-level flags.
+
+| Field | Value | Why |
+|-------|-------|-----|
+| `model` | path to weights | Where vLLM loads the model from. Must match the mount path on the server. |
+| `tokenizer_mode` | `"auto"` | How to load the tokenizer. `"auto"` = let vLLM detect (picks the fast Rust tokenizer when available). Other option is `"slow"` to force the slow Python tokenizer. |
+| `trust_remote_code` | `true` | Qwen2-VL has custom code in its HuggingFace repo (custom processor, custom modeling code). Without this, HuggingFace refuses to run untrusted code. |
+| `dtype` | `"half"` (GPTQ) / `"bfloat16"` (BF16) | Computation precision. See Q38 for why GPTQ uses FP16 instead of BF16. |
+| `quantization` | `"gptq_marlin"` | Which quantization kernel to use. Marlin is an optimized CUDA kernel for GPTQ that's faster than the default GPTQ kernel. vLLM auto-selects this when compatible. Only present for GPTQ model. |
+| `tensor_parallel_size` | `1` | How many GPUs to split the model across. 1 = single GPU. Set to 2 for dual-GPU. |
+| `gpu_memory_utilization` | `0.9` | vLLM pre-allocates this fraction of GPU VRAM for KV cache. 0.9 = use 90% of available memory. Higher = more concurrent requests possible, but leaves less room for other processes. |
+| `max_model_len` | `4096` | Maximum sequence length (input + output tokens). Limits VRAM usage. Our nutrition detection prompts are short, so 4096 is plenty. |
+| `limit_mm_per_prompt` | `{"image": 1}` | Max 1 image per prompt. Prevents users from sending multi-image requests that could OOM. |
+| `enable_prefix_caching` | `false` | Disable KV cache reuse across requests with shared prefixes. Set to false for unbiased benchmarks. |
+
+---
+
+## Q38: Why does the GPTQ model use `dtype: "half"` (FP16) instead of `"bfloat16"`?
+
+A:
+
+GPTQ quantization and the Marlin kernel are designed around FP16. The weights are stored as INT4, but when they're dequantized during computation, the Marlin kernel outputs FP16. BF16 has fewer mantissa bits (7 vs 10) which can hurt precision after dequantization. The quantization process itself was calibrated assuming FP16 computation.
+
+For the full-precision (BF16) model, there's no quantization involved, so BF16's larger dynamic range (more exponent bits) is beneficial and precision loss is not an issue.
+
+| Model | dtype | Why |
+|-------|-------|-----|
+| GPTQ INT4 | `"half"` (FP16) | Marlin kernel outputs FP16; more mantissa bits preserve accuracy after dequantization |
+| BF16 Baseline | `"bfloat16"` | No quantization; BF16's larger range is beneficial for full-precision models |
+
+---
+
+## Q39: What does each field in `config.pbtxt` mean?
+
+A:
+
+`config.pbtxt` tells Triton **how to expose the model as an API**. It uses protobuf text format.
+
+**Top-level fields:**
+
+| Field | Value | Why |
+|-------|-------|-----|
+| `name` | `"qwen2vl_nutrition_gptq_int4"` | Model name in the API URL (e.g., `/v2/models/qwen2vl_nutrition_gptq_int4/generate`) |
+| `backend` | `"vllm"` | Which backend to use. Triton supports many backends (TensorRT, ONNX, Python, vLLM, etc.) |
+| `max_batch_size` | `0` | Tells Triton "don't do batching yourself." vLLM has its own continuous batching that's more sophisticated — Triton batching would conflict with it. |
+
+**Input tensors** — defines the API contract (what fields clients can send):
+
+| Input | Type | Optional? | Purpose |
+|-------|------|-----------|---------|
+| `text_input` | TYPE_STRING | No (required) | The text prompt |
+| `image` | TYPE_STRING | Yes | Base64-encoded image. `optional: true` means clients can omit this field — if omitted, inference proceeds as text-only. |
+| `sampling_parameters` | TYPE_STRING | Yes | JSON string like `{"temperature": 0, "max_tokens": 100}` |
+| `stream` | TYPE_BOOL | Yes | Whether to stream tokens back one-by-one. We don't use streaming, but it's part of the vLLM backend's standard interface. If omitted, defaults to false. |
+| `exclude_input_in_output` | TYPE_BOOL | Yes | Don't echo the prompt in the response. Also standard interface, we don't use it. |
+
+**`optional: true`** means "the client does NOT need to send this field." If a field is NOT marked optional, Triton rejects requests that omit it. The `stream` and `exclude_input_in_output` fields exist because the vLLM backend supports them as standard features — we define them so clients *can* use them, even though our benchmark script doesn't.
+
+**Output tensor:**
+
+| Output | Type | Dims | Meaning |
+|--------|------|------|---------|
+| `text_output` | TYPE_STRING | `[-1]` | Generated text. `dims: [-1]` means variable length (output can be any length). |
+
+**Instance group:**
+
+```
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+  }
+]
+```
+
+- `count: 1` — one instance of the model
+- `kind: KIND_MODEL` — tells Triton "the backend (vLLM) manages its own GPU placement." This is different from `KIND_GPU` where Triton would assign GPUs. With KIND_MODEL, you must NOT specify `gpus:` — doing so causes a crash.
+
+**Model transaction policy:**
+
+```
+model_transaction_policy {
+  decoupled: true
+}
+```
+
+"Decoupled" means one request can produce multiple responses (for streaming — token by token). vLLM requires this even if you don't stream, because the backend is designed for streaming. This is why we must use `/generate` (not `/infer`) — the `/infer` endpoint expects exactly one response per request and rejects decoupled models.
+
+---
+
+## Q40: Where can I find all available inputs for the vLLM backend's config.pbtxt?
+
+A:
+
+The available inputs are defined by the **vLLM backend**, not Triton itself. The source of truth is `src/model.py` in the vLLM backend repo:
+
+https://github.com/triton-inference-server/vllm_backend/blob/main/src/model.py
+
+That file defines what input names the backend recognizes. The full list:
+
+| Input name | Required? | What it does |
+|-----------|-----------|-------------|
+| `text_input` | Yes | The text prompt |
+| `image` | No | Base64 image for VLMs |
+| `sampling_parameters` | No | JSON string with temperature, max_tokens, etc. |
+| `stream` | No | Stream tokens back one-by-one |
+| `exclude_input_in_output` | No | Don't echo prompt in response |
+
+You only need to declare in `config.pbtxt` the ones you actually want to use. Our config includes `stream` and `exclude_input_in_output` even though we don't use them — they're part of the vLLM backend's standard interface and marked `optional: true`, so clients can simply omit them.
+
+---
+
+## Q41: How does the benchmark script connect to the Docker container? Why does it fail when the container isn't running?
+
+A:
+
+The benchmark script **doesn't know Docker exists**. It just sends HTTP requests to `localhost:8000`. The connection happens through Docker's port forwarding.
+
+**The `docker run -p 8000:8000` flag creates the link** — it forwards port 8000 on the host to port 8000 inside the container, where Triton is listening.
+
+**Full flow:**
+
+```
+benchmark_triton.py
+    │
+    │  Builds URL: http://localhost:8000/v2/models/{model_name}/generate
+    │
+    ▼
+localhost:8000  ← Is anyone listening?
+    │
+    │  Docker's port forwarding (-p 8000:8000)
+    │
+    ▼
+Container's port 8000
+    │
+    │  Triton server is listening here
+    │  Looks up: "do I have a model named {model_name}?"
+    │
+    ▼
+Found → run inference → return result
+```
+
+**Why GPTQ worked but BF16 failed:**
+
+Each `docker run` only mounts **one** model's config directory. So the GPTQ container only knows about GPTQ, and the BF16 container only knows about BF16.
+
+- GPTQ container running → Triton listening on 8000 → request arrives → model found → works
+- BF16 container NOT running → nothing on port 8000 → connection refused → all 20 fail in 0.03s
+
+**`localhost:8000` is like a phone number.** You dial it, but someone must **pick up** (a program must be listening) for anything to happen. When the container is running, Triton picks up. When it's not, nobody answers.
+
+The `--model` flag in the benchmark script is just a string placed into the URL — it doesn't find or connect to a container. Triton (inside the container) matches that string to a loaded model.

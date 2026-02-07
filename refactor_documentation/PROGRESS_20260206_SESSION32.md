@@ -235,32 +235,14 @@ Run on **cloud server** (use the requirements file for reproducibility):
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-Below are the ad-hoc commands we ran initially to discover the dependencies (before creating `requirements_triton_benchmark.txt`):
-```bash
-pip install aiohttp numpy Pillow datasets qwen-vl-utils
-pip install 'tritonclient[all]'
-pip install 'transformers>=4.45,<5.0'    # 5.x breaks Qwen2VLProcessor
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install 'jinja2>=3.1.0'
-```
-
-### Dependency errors encountered
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `TypeError: argument of type 'NoneType' is not iterable` in `video_processing_auto.py` | `transformers==5.1.0` has a bug with Qwen2VL's video processor auto-detection | Pin `transformers>=4.45,<5.0` |
-| `PyTorch was not found. Models won't be available` | Host doesn't have torch installed (only the Docker container does) | `pip install torch --index-url .../cpu` |
-| `AutoVideoProcessor requires the Torchvision library` | `Qwen2VLProcessor.from_pretrained()` needs torchvision for image processing | `pip install torchvision --index-url .../cpu` |
-| `apply_chat_template requires jinja2>=3.1.0. Your version is 3.0.3` | Host's jinja2 is too old for chat template rendering | `pip install 'jinja2>=3.1.0'` |
-
 **Key insight**: The Triton Docker container has its own Python environment with all ML dependencies. But our benchmark scripts run on the host, which is a bare Ubuntu with minimal packages. The host needs its own compatible set of dependencies for the processor/tokenizer.
 
-**Reproducible setup**: The project includes `requirements_triton_benchmark.txt` — a pip-installable subset of `environment_vllm_serving.yml` with CPU-only torch (sufficient for tokenizer/processor). On any new cloud machine:
+**Reproducible setup**: The project includes `requirements_triton_benchmark.txt` — a pip-installable file with CPU-only torch (sufficient for tokenizer/processor). On any new cloud machine:
 ```bash
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-**How this environment was built**: Dependencies were initially installed ad-hoc on the Vast.ai host while debugging errors (see table above). The final working versions were captured in `requirements_triton_benchmark.txt`. Torch/torchvision use `+cpu` because the benchmark client only needs PyTorch for the tokenizer/processor, not GPU inference (that runs inside the Triton container).
+**How this environment was built**: Dependencies were initially installed ad-hoc on the Vast.ai host while debugging errors. The final working versions were captured in `requirements_triton_benchmark.txt`. Torch/torchvision use `+cpu` because the benchmark client only needs PyTorch for the tokenizer/processor, not GPU inference (that runs inside the Triton container).
 
 ---
 
@@ -404,7 +386,7 @@ These were ~50% faster than real-world because prefix caching reused KV cache ac
 
 **Notes**:
 - Max latency (~3282ms) on c=1 is the first request triggering CUDA graph compilation.
-- gRPC benchmark was skipped — our script uses `client.infer()` (unary RPC) which doesn't work with decoupled models. Would need `stream_infer()` (streaming RPC) instead.
+- gRPC benchmark was not done. Our script uses `client.infer()` (unary RPC) which doesn't work with decoupled models — would need `stream_infer()` (streaming RPC) instead. However, gRPC vs HTTP transport difference is ~1-5ms, negligible compared to inference time (470ms+ GPTQ, 700ms+ BF16). gRPC benchmarks are not a priority unless we move to high-throughput production with thousands of requests per second.
 
 ---
 
