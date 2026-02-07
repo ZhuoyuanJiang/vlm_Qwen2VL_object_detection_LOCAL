@@ -386,7 +386,7 @@ The `/generate` response format is also simpler:
 {"model_name": "...", "model_version": "1", "text_output": "the generated text"}
 ```
 
-**Why gRPC doesn't have this problem**: gRPC natively supports streaming (server-side streaming RPCs), so it works with both `decoupled: true` and `decoupled: false`. The gRPC benchmark path in our script was already correct.
+**gRPC and decoupled models**: The gRPC *protocol* supports streaming RPCs, so decoupled models can work over gRPC. However, our benchmark script uses `client.infer()` (unary RPC), not `client.stream_infer()` (streaming RPC). Unary `infer()` fails with decoupled models just like HTTP `/infer` does. To benchmark gRPC, the script would need to be updated to use `stream_infer()`. This was not implemented; gRPC benchmarks were skipped.
 
 ### Benchmark
 
@@ -432,9 +432,11 @@ docker stop triton-gptq
 | P90 Latency (ms) | 559.1 | 1098.9 |
 | P99 Latency (ms) | 2765.5 | 1111.4 |
 
+**Note on prefix caching**: We set `enable_prefix_caching: false` in model.json, which is passed to vLLM's `AsyncEngineArgs`. No error was raised, so the flag was accepted. As a second layer of protection, `--vary-images` sends a different image per request, so even if the flag were somehow ignored, there would be minimal KV cache reuse across requests.
+
 Commands used:
 ```bash
-# Disable prefix caching in model.json before starting container
+# Disable prefix caching in model.json (one-time, before starting container)
 python3 -c "import json; d=json.load(open('/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json')); d['enable_prefix_caching']=False; json.dump(d,open('/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json','w'),indent=4)"
 
 export QWEN2VL_PROCESSOR_PATH=/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4
@@ -459,7 +461,7 @@ These were ~50% faster than real-world because prefix caching reused KV cache ac
 
 **Notes**:
 - Max latency (~3282ms) on c=1 is the first request triggering CUDA graph compilation.
-- gRPC benchmark was skipped — `client.infer()` (unary RPC) doesn't work with decoupled models.
+- gRPC benchmark was skipped — our script uses `client.infer()` (unary RPC) which doesn't work with decoupled models. Would need `stream_infer()` (streaming RPC) instead.
 
 ---
 
@@ -677,7 +679,7 @@ But this means:
 1. **vLLM version matters more than Triton version** — if vLLM has a bug with your model, Triton can't fix it
 2. **`model.json` = `AsyncEngineArgs`** — every key gets passed directly to vLLM, no extras allowed
 3. **`config.pbtxt` = Triton orchestration** — input/output tensor definitions, instance groups, transaction policy
-4. **Decoupled mode is mandatory for vLLM** — use `/generate` (HTTP) or gRPC, not `/infer`
+4. **Decoupled mode is mandatory for vLLM** — use `/generate` (HTTP) or `stream_infer()` (gRPC), not `/infer` (HTTP) or unary `infer()` (gRPC)
 5. **Host vs Container** — benchmark scripts run on the host, model inference runs inside Docker. They need separate dependency management.
 
 ---
