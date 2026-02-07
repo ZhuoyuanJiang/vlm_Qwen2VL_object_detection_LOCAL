@@ -267,7 +267,7 @@ Key insight: Our **lab server runs vLLM 0.13.0 on driver 550.144.03** (even olde
 |------|--------|--------|
 | 1 | Try `enforce_eager=True` with Triton 25.11 (vLLM 0.11.0) | Failed — same `cu_seqlens_q` error |
 | 2 | Pull Triton 26.01 (vLLM 0.13.0) despite driver matrix | **Success!** |
-| 3 | Proceed with benchmarks | In progress |
+| 3 | Proceed with benchmarks | **Complete** |
 
 **Triton 26.01 startup confirmed** with driver 580.95.05. The container logged:
 ```
@@ -289,9 +289,8 @@ Run on **cloud server** (use the requirements file for reproducibility):
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-The above commands were how we originally discovered the dependencies ad-hoc:
+Below are the ad-hoc commands we ran initially to discover the dependencies (before creating `requirements_triton_benchmark.txt`):
 ```bash
-# What we ran initially (before creating requirements_triton_benchmark.txt):
 pip install aiohttp numpy Pillow datasets qwen-vl-utils
 pip install 'tritonclient[all]'
 pip install 'transformers>=4.45,<5.0'    # 5.x breaks Qwen2VLProcessor
@@ -315,7 +314,7 @@ pip install 'jinja2>=3.1.0'
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-**How this environment was built**: Dependencies were initially installed ad-hoc on the Vast.ai host while debugging errors (see table above). Afterwards, all version pins in `requirements_triton_benchmark.txt` were aligned to `environment_vllm_serving.yml` to maintain a single source of truth. The only intentional difference is torch/torchvision using `+cpu` instead of `+cu129` — the benchmark client only needs PyTorch for the tokenizer/processor, not GPU inference (that runs inside the Triton container). The Vast.ai host environment was then downgraded to match these aligned versions, and all benchmarks were re-verified.
+**How this environment was built**: Dependencies were initially installed ad-hoc on the Vast.ai host while debugging errors (see table above). The final working versions were captured in `requirements_triton_benchmark.txt`. Torch/torchvision use `+cpu` because the benchmark client only needs PyTorch for the tokenizer/processor, not GPU inference (that runs inside the Triton container).
 
 ---
 
@@ -702,11 +701,15 @@ But this means:
 │   ├── validate_triton_accuracy.py
 │   └── benchmark_vllm.py
 └── results/
-    ├── gptq_http_c1.json
-    ├── gptq_http_c4.json
-    ├── gptq_grpc_c1.json
-    ├── bf16_http_c1.json
-    └── bf16_http_c4.json
+    ├── gptq_http_c1.json          # biased (prefix caching ON)
+    ├── gptq_http_c4.json          # biased
+    ├── gptq_grpc_c1.json          # biased
+    ├── bf16_http_c1.json          # biased
+    ├── bf16_http_c4.json          # biased
+    ├── gptq_http_c1_unbiased.json # prefix caching OFF, varied images
+    ├── gptq_http_c4_unbiased.json
+    ├── bf16_http_c1_unbiased.json
+    └── bf16_http_c4_unbiased.json
 ```
 
 ---
