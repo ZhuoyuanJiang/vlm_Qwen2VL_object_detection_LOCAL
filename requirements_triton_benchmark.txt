@@ -4,26 +4,24 @@
 # handles model inference with its own environment. The host just needs
 # enough to build prompts (tokenizer/processor) and send HTTP/gRPC requests.
 #
-# Usage:
-#   pip install -r requirements_triton_benchmark.txt
-#
-# For CPU-only torch (smaller download, sufficient for tokenizer/processor):
+# Usage (CPU-only torch is sufficient for tokenizer/processor):
 #   pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 #
-# Version pins are based on environment_vllm_serving.yml (known-good versions).
+# Pinned from the working Vast.ai deployment (2026-02-06, Python 3.10).
+# IMPORTANT: transformers must be <5.0 (5.x has bugs with Qwen2VLProcessor).
 
 # HTTP/gRPC client
-aiohttp>=3.9.0
-tritonclient[all]>=2.40.0
+aiohttp==3.13.3
+tritonclient[all]==2.65.0
 
 # Tokenizer and processor (needed for prompt construction via apply_chat_template)
-transformers>=4.45,<5.0    # transformers 5.x has bugs with Qwen2VLProcessor
-torch>=2.0.0               # CPU-only is sufficient; use --extra-index-url for CPU wheel
-torchvision>=0.15.0        # Required by Qwen2VLProcessor for image processing
-jinja2>=3.1.0              # Required by apply_chat_template()
+transformers==4.57.6       # Must be <5.0; 5.x breaks Qwen2VLProcessor video_processing_auto
+torch==2.10.0+cpu          # CPU-only; sufficient for tokenizer/processor
+torchvision==0.25.0+cpu    # Required by Qwen2VLProcessor for image processing
+jinja2==3.1.6              # Required by apply_chat_template()
 
 # Image handling and dataset loading
-Pillow>=10.0.0
-numpy>=1.24.0
-datasets>=2.14.0
-qwen-vl-utils>=0.0.8
+Pillow==12.1.0
+numpy==2.2.6
+datasets==4.5.0
+qwen-vl-utils==0.0.14

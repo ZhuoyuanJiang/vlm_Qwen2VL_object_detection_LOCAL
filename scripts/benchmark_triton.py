@@ -421,7 +421,7 @@ async def main():
     # Load test images
     print("Loading test images...")
     num_images = args.num_requests if args.vary_images else 1
-    images = [load_test_image(i) for i in range(min(num_images, 20))]
+    images = [load_test_image(i) for i in range(num_images)]
     print(f"Loaded {len(images)} test image(s)")
 
     # Prompt for nutrition detection (aligned with training via chat template)

@@ -312,11 +312,12 @@ pip install 'jinja2>=3.1.0'
 
 **Key insight**: The Triton Docker container has its own Python environment with all ML dependencies. But our benchmark scripts run on the host, which is a bare Ubuntu with minimal packages. The host needs its own compatible set of dependencies for the processor/tokenizer.
 
-**Reproducible setup**: The project includes `requirements_triton_benchmark.txt` with pinned version ranges for benchmark client dependencies. On any new cloud machine:
+**Reproducible setup**: The project includes `requirements_triton_benchmark.txt` — a pip-installable subset of `environment_vllm_serving.yml` with CPU-only torch (sufficient for tokenizer/processor). On any new cloud machine:
 ```bash
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
-This installs CPU-only torch (sufficient for tokenizer/processor) and all client-side packages. Version pins are based on `environment_vllm_serving.yml` (Session 24), which contains the full vLLM serving environment with GPU torch — use that if you need to run standalone vLLM on the same host.
+
+**TODO**: The current `requirements_triton_benchmark.txt` version pins need to be aligned with `environment_vllm_serving.yml`. Torch has already been downgraded to 2.9.0+cpu (matching yml's 2.9.0+cu129). Remaining packages (transformers, aiohttp, datasets, etc.) still need to be re-pinned from the yml and re-tested.
 
 ---
 
@@ -417,24 +418,48 @@ python /workspace/scripts/benchmark_triton.py \
 docker stop triton-gptq
 ```
 
-### Results
+### Results (Unbiased — prefix caching OFF, varied images)
 
 | Metric | HTTP c=1 | HTTP c=4 |
 |--------|----------|----------|
 | Successful | 20/20 | 20/20 |
-| Total time (s) | 9.27 | 1.96 |
-| Throughput (req/s) | **2.16** | **10.20** |
-| Avg Latency (ms) | 463.4 | 365.2 |
-| Min Latency (ms) | 260.3 | 253.7 |
-| Max Latency (ms) | 3366.8 | 618.5 |
-| P50 Latency (ms) | **309.9** | **325.0** |
-| P90 Latency (ms) | 336.7 | 449.2 |
-| P99 Latency (ms) | 2801.2 | 608.2 |
+| Total time (s) | 12.15 | 5.07 |
+| Throughput (req/s) | **1.65** | **3.94** |
+| Avg Latency (ms) | 607.4 | 1012.9 |
+| Min Latency (ms) | 260.5 | 857.9 |
+| Max Latency (ms) | 3282.0 | 1113.5 |
+| P50 Latency (ms) | **469.7** | **1012.5** |
+| P90 Latency (ms) | 559.1 | 1098.9 |
+| P99 Latency (ms) | 2765.5 | 1111.4 |
+
+Commands used:
+```bash
+# Disable prefix caching in model.json before starting container
+python3 -c "import json; d=json.load(open('/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json')); d['enable_prefix_caching']=False; json.dump(d,open('/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json','w'),indent=4)"
+
+export QWEN2VL_PROCESSOR_PATH=/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4
+
+# c=1 with --vary-images (20 unique images, no prefix cache reuse)
+python3 /workspace/scripts/benchmark_triton.py --endpoint http --model qwen2vl_nutrition_gptq_int4 --num-requests 20 --concurrency 1 --vary-images --output /workspace/results/gptq_http_c1_unbiased.json
+
+# c=4 with --vary-images
+python3 /workspace/scripts/benchmark_triton.py --endpoint http --model qwen2vl_nutrition_gptq_int4 --num-requests 20 --concurrency 4 --vary-images --output /workspace/results/gptq_http_c4_unbiased.json
+```
+
+<details>
+<summary>Earlier biased results (prefix caching ON, same image repeated — for reference only)</summary>
+
+| Metric | HTTP c=1 | HTTP c=4 |
+|--------|----------|----------|
+| Throughput (req/s) | 2.16 | 10.20 |
+| P50 Latency (ms) | 309.9 | 325.0 |
+
+These were ~50% faster than real-world because prefix caching reused KV cache across identical requests.
+</details>
 
 **Notes**:
-- The c=1 max latency (3367ms) and high P99 (2801ms) are due to the **first request** triggering CUDA graph compilation. Subsequent requests are fast (~260-340ms).
-- At c=4, vLLM's continuous batching kicks in — throughput scales ~4.7x while per-request latency only increases ~5%.
-- gRPC benchmark failed because `client.infer()` (unary RPC) doesn't work with decoupled models. Would need `stream_infer()` — deferred for now since HTTP results are sufficient.
+- Max latency (~3282ms) on c=1 is the first request triggering CUDA graph compilation.
+- gRPC benchmark was skipped — `client.infer()` (unary RPC) doesn't work with decoupled models.
 
 ---
 
@@ -473,24 +498,37 @@ python /workspace/scripts/benchmark_triton.py \
 docker stop triton-bf16
 ```
 
-### Results
+### Results (Unbiased — prefix caching OFF, varied images)
 
 | Metric | HTTP c=1 | HTTP c=4 |
 |--------|----------|----------|
 | Successful | 20/20 | 20/20 |
-| Total time (s) | 13.78 | 3.12 |
-| Throughput (req/s) | **1.45** | **6.41** |
-| Avg Latency (ms) | 689.0 | 591.4 |
-| Min Latency (ms) | 524.7 | 501.7 |
-| Max Latency (ms) | 3584.2 | 841.2 |
-| P50 Latency (ms) | **538.3** | **560.1** |
-| P90 Latency (ms) | 540.8 | 729.0 |
-| P99 Latency (ms) | 3006.5 | 838.9 |
+| Total time (s) | 16.79 | 6.20 |
+| Throughput (req/s) | **1.19** | **3.23** |
+| Avg Latency (ms) | 839.6 | 1235.9 |
+| Min Latency (ms) | 485.3 | 1074.8 |
+| Max Latency (ms) | 3605.1 | 1331.1 |
+| P50 Latency (ms) | **703.3** | **1236.2** |
+| P90 Latency (ms) | 769.5 | 1325.0 |
+| P99 Latency (ms) | 3075.1 | 1330.6 |
 
-**Notes**:
-- BF16 is ~1.7x slower than GPTQ INT4 at P50 (538ms vs 310ms). This is expected — quantized models are faster.
-- First-request latency spike (~3584ms) again due to CUDA graph compilation.
-- At c=4, throughput scales ~4.4x (1.45 → 6.41 req/s) while latency increases modestly.
+Commands used:
+```bash
+export QWEN2VL_PROCESSOR_PATH=/workspace/models/qwen2vl-nutrition-detection-r4-joint-merged
+
+python3 /workspace/scripts/benchmark_triton.py --endpoint http --model qwen2vl_nutrition_bf16 --num-requests 20 --concurrency 1 --vary-images --output /workspace/results/bf16_http_c1_unbiased.json
+
+python3 /workspace/scripts/benchmark_triton.py --endpoint http --model qwen2vl_nutrition_bf16 --num-requests 20 --concurrency 4 --vary-images --output /workspace/results/bf16_http_c4_unbiased.json
+```
+
+<details>
+<summary>Earlier biased results (prefix caching ON, same image repeated — for reference only)</summary>
+
+| Metric | HTTP c=1 | HTTP c=4 |
+|--------|----------|----------|
+| Throughput (req/s) | 1.45 | 6.41 |
+| P50 Latency (ms) | 538.3 | 560.1 |
+</details>
 
 ---
 
@@ -508,26 +546,28 @@ rsync -avz --progress -e "ssh -p ${PORT}" ${REMOTE}:/workspace/results/ ~/projec
 
 ## Comparison: Triton vs Standalone vLLM (Session 29)
 
+All Session 32 results below are **unbiased** (prefix caching OFF, varied images).
+
 | Metric | vLLM Standalone GPTQ (Session 29) | Triton GPTQ HTTP c=1 | Triton BF16 HTTP c=1 |
 |--------|-----------------------------------|----------------------|----------------------|
 | GPU | RTX 3090 (vllab8) | RTX 4090 (Vast.ai) | RTX 4090 (Vast.ai) |
 | vLLM Version | 0.13.0 | 0.13.0 (Triton 26.01) | 0.13.0 (Triton 26.01) |
-| Throughput (req/s) | 1.15 | **2.16** | 1.45 |
-| E2E / P50 Latency (ms) | 819 | **309.9** | 538.3 |
+| Throughput (req/s) | 1.15 | **1.65** | 1.19 |
+| E2E / P50 Latency (ms) | 819 | **469.7** | 703.3 |
 | TPOT (ms) | 7.4 | — | — |
 
 **Scaling with concurrency**:
 
 | Metric | Triton GPTQ c=1 | Triton GPTQ c=4 | Triton BF16 c=1 | Triton BF16 c=4 |
 |--------|-----------------|-----------------|-----------------|-----------------|
-| Throughput (req/s) | 2.16 | **10.20** | 1.45 | **6.41** |
-| P50 Latency (ms) | 309.9 | 325.0 | 538.3 | 560.1 |
+| Throughput (req/s) | 1.65 | **3.94** | 1.19 | **3.23** |
+| P50 Latency (ms) | 469.7 | 1012.5 | 703.3 | 1236.2 |
 
 **Key observations**:
-- **GPTQ INT4 is ~1.7x faster** than BF16 at P50 latency (310ms vs 538ms), consistent with 4-bit quantization reducing memory bandwidth and computation.
-- **Concurrency scales well**: c=4 gives ~4.5-4.7x throughput with minimal latency increase. This is vLLM's continuous batching at work.
-- **RTX 4090 vs RTX 3090**: The GPTQ P50 dropped from 819ms → 310ms (~2.6x faster). This reflects the 4090's higher memory bandwidth (1 TB/s vs 936 GB/s) and more CUDA cores.
-- **Triton overhead is negligible**: The numbers show Triton adds minimal overhead over standalone vLLM, while providing proper production serving infrastructure (health checks, metrics, model management).
+- **GPTQ INT4 is ~1.5x faster** than BF16 at P50 latency (470ms vs 703ms), consistent with 4-bit quantization reducing memory bandwidth and computation.
+- **Concurrency tradeoff**: c=4 gives ~2.4-2.7x throughput but P50 latency increases ~2x. This is realistic — with varied images, each request needs full prefill, so batching increases per-request latency.
+- **RTX 4090 vs RTX 3090**: The GPTQ P50 dropped from 819ms → 470ms (~1.7x faster).
+- **Prefix caching impact**: The earlier biased results (same image, prefix caching ON) showed P50=310ms — about 50% faster than the unbiased 470ms. This shows prefix caching has a large effect when input prompts share common prefixes.
 
 **Caveat**: The Session 29 vs Session 32 comparison involves different hardware. For a strict Triton-overhead measurement, rerun standalone vLLM benchmarks on the same RTX 4090.
 
@@ -732,6 +772,18 @@ docker pull nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3
 
 # Install benchmark client dependencies (CPU torch is sufficient)
 pip install -r /workspace/scripts/requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+### On Cloud Server: Disable prefix caching for unbiased benchmarks
+
+```bash
+python3 -c "
+import json
+for path in ['/workspace/triton_model_repository/qwen2vl_nutrition_gptq_int4/1/model.json', '/workspace/triton_model_repository/qwen2vl_nutrition_bf16/1/model.json']:
+    with open(path) as f: d = json.load(f)
+    d['enable_prefix_caching'] = False
+    with open(path, 'w') as f: json.dump(d, f, indent=4)
+"
 ```
 
 ### On Cloud Server: GPTQ INT4 Benchmark

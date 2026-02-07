@@ -1,0 +1,29 @@
+{
+  "config": {
+    "models": [
+      "qwen2vl_nutrition_bf16"
+    ],
+    "endpoint": "http",
+    "num_requests": 20,
+    "concurrency": 4,
+    "vary_images": true
+  },
+  "summaries": [
+    {
+      "model_name": "qwen2vl_nutrition_bf16",
+      "endpoint": "http",
+      "num_requests": 20,
+      "concurrency": 4,
+      "successful_requests": 20,
+      "failed_requests": 0,
+      "total_time_s": 6.197850521002692,
+      "throughput_rps": 3.2269251948277686,
+      "avg_latency_ms": 1235.8956378506264,
+      "min_latency_ms": 1074.8374570030137,
+      "max_latency_ms": 1331.057041999884,
+      "p50_latency_ms": 1236.1621455002023,
+      "p90_latency_ms": 1325.0285187001282,
+      "p99_latency_ms": 1330.6344732601792
+    }
+  ]
+}

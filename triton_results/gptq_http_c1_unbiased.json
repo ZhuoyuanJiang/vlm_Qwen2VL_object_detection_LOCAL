@@ -1,0 +1,29 @@
+{
+  "config": {
+    "models": [
+      "qwen2vl_nutrition_gptq_int4"
+    ],
+    "endpoint": "http",
+    "num_requests": 20,
+    "concurrency": 1,
+    "vary_images": true
+  },
+  "summaries": [
+    {
+      "model_name": "qwen2vl_nutrition_gptq_int4",
+      "endpoint": "http",
+      "num_requests": 20,
+      "concurrency": 1,
+      "successful_requests": 20,
+      "failed_requests": 0,
+      "total_time_s": 12.152642981996905,
+      "throughput_rps": 1.6457325397963454,
+      "avg_latency_ms": 607.4414593504116,
+      "min_latency_ms": 260.5439569997543,
+      "max_latency_ms": 3281.9737490026455,
+      "p50_latency_ms": 469.70306350158353,
+      "p90_latency_ms": 559.0505170017423,
+      "p99_latency_ms": 2765.534022822536
+    }
+  ]
+}
