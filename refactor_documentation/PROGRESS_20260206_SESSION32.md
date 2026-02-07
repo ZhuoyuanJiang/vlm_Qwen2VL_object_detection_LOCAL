@@ -283,21 +283,19 @@ This is just an informational warning — the container runs fine in this mode. 
 
 The benchmark scripts run on the **host machine** (not inside Docker), so dependencies must be installed on the host. The Vast.ai host has Python 3.10.
 
-Run on **cloud server**:
+Run on **cloud server** (use the requirements file for reproducibility):
 
 ```bash
-# Core dependencies
+pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+The above commands were how we originally discovered the dependencies ad-hoc:
+```bash
+# What we ran initially (before creating requirements_triton_benchmark.txt):
 pip install aiohttp numpy Pillow datasets qwen-vl-utils
-pip install 'tritonclient[all]'   # for gRPC benchmarks
-
-# IMPORTANT: transformers 5.x has bugs with Qwen2VLProcessor (video_processing_auto.py fails)
-# Pin to transformers 4.x
-pip install 'transformers>=4.45,<5.0'
-
-# The processor needs PyTorch + torchvision (CPU-only is fine for tokenization)
+pip install 'tritonclient[all]'
+pip install 'transformers>=4.45,<5.0'    # 5.x breaks Qwen2VLProcessor
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-# Jinja2 >= 3.1 required for apply_chat_template()
 pip install 'jinja2>=3.1.0'
 ```
 
@@ -317,7 +315,7 @@ pip install 'jinja2>=3.1.0'
 pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-**TODO**: The current `requirements_triton_benchmark.txt` version pins need to be aligned with `environment_vllm_serving.yml`. Torch has already been downgraded to 2.9.0+cpu (matching yml's 2.9.0+cu129). Remaining packages (transformers, aiohttp, datasets, etc.) still need to be re-pinned from the yml and re-tested.
+**How this environment was built**: Dependencies were initially installed ad-hoc on the Vast.ai host while debugging errors (see table above). Afterwards, all version pins in `requirements_triton_benchmark.txt` were aligned to `environment_vllm_serving.yml` to maintain a single source of truth. The only intentional difference is torch/torchvision using `+cpu` instead of `+cu129` — the benchmark client only needs PyTorch for the tokenizer/processor, not GPU inference (that runs inside the Triton container). The Vast.ai host environment was then downgraded to match these aligned versions, and all benchmarks were re-verified.
 
 ---
 
