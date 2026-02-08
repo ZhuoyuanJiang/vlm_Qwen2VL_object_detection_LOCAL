@@ -5,9 +5,9 @@ Purpose:
     - Send one multimodal request to vLLM and inspect the returned text output.
     - Parse bbox tokens and draw a local visualization for quick human checking.
 
-Relation to test_vllm_api.py:
+Relation to quick_test_vllm_api.py:
     - Both scripts make the same vLLM API call.
-    - test_vllm_api.py prints raw output only.
+    - quick_test_vllm_api.py prints raw output only.
     - This script adds local post-processing (parse + draw + save image).
 
 When to use:
@@ -19,7 +19,7 @@ When not to use:
     - Not a batch accuracy evaluation pipeline.
 
 Usage:
-    python scripts/test_vllm_with_visualization.py
+    python scripts/quick_test_vllm_with_visualization.py
 
 Prerequisite:
     A vLLM server is already running at http://localhost:8000

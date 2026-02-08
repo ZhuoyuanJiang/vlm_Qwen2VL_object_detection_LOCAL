@@ -14,7 +14,7 @@ When not to use:
     - Not for accuracy reporting across many samples.
 
 Usage:
-    python scripts/test_vllm_api.py
+    python scripts/quick_test_vllm_api.py
 
 Prerequisite:
     A vLLM server is already running at http://localhost:8000

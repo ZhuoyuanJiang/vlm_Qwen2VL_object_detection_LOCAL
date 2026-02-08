@@ -8,7 +8,7 @@ DEPRECATED (2026-02-06):
     actively-maintained evaluation/benchmarking flow and may be deleted later.
 
     Prefer these scripts instead:
-      - vLLM: `scripts/test_vllm_api.py`, `scripts/test_vllm_with_visualization.py`
+      - vLLM: `scripts/quick_test_vllm_api.py`, `scripts/quick_test_vllm_with_visualization.py`
       - vLLM accuracy: `scripts/evaluate_vllm_accuracy.py`, `scripts/establish_baseline.py`
       - Triton accuracy: `scripts/validate_triton_accuracy.py`
       - Triton benchmarking: `scripts/benchmark_triton.py`
@@ -314,7 +314,7 @@ def get_sample_image_from_dataset() -> Optional[str]:
 def main():
     print(
         "WARNING: `scripts/test_deployment_inference.py` is deprecated. "
-        "Prefer `scripts/test_vllm_api.py`, `scripts/test_vllm_with_visualization.py`, "
+        "Prefer `scripts/quick_test_vllm_api.py`, `scripts/quick_test_vllm_with_visualization.py`, "
         "`scripts/evaluate_vllm_accuracy.py`, `scripts/benchmark_triton.py`, or "
         "`scripts/validate_triton_accuracy.py`."
     )
