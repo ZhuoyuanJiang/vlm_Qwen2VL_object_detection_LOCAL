@@ -71,7 +71,7 @@ jupyter notebook fine_tuning_vlm_for_object_detection_trl.ipynb
 | Environment | Primary Use | Notes |
 |-------------|-------------|-------|
 | `vlm_Qwen2VL_object_detection` | Training, notebook development, refactor scripts | Main dev/training environment (`environment.yml`) |
-| `/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving` | GPTQ quantization, standalone vLLM serving, serving benchmarks | Includes `vllm` stack and `gptqmodel` used by `scripts/quantize_model_gptq.py` |
+| `qwen2vl_nutrition_vllm_serving` | GPTQ quantization, standalone vLLM serving, serving benchmarks | Defined by `environment_vllm_serving.yml`; local path reference: `/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving` |
 
 ### Key Dependencies
 - `transformers` (git HEAD) - HuggingFace transformers
@@ -87,6 +87,18 @@ conda env create -f environment.yml
 
 # From exact snapshot (same platform only)
 conda env create -f environment.lock.yml
+```
+
+### Recreate vLLM Serving Environment
+```bash
+# Create serving/quantization environment from export
+conda env create -f environment_vllm_serving.yml
+
+# Activate by environment name (recommended, portable)
+conda activate qwen2vl_nutrition_vllm_serving
+
+# Optional local path activation (machine-specific personal reference)
+conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
 ```
 
 ## ⚠️ TRL Version Note
@@ -143,6 +155,23 @@ trainer = SFTTrainer(
     ```bash
     jupytext --to ipynb /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.py
     ```
+
+## 📓 Notebook Guide
+
+| Notebook | Focus | Prerequisites | Run All |
+|----------|-------|---------------|---------|
+| `notebooks/01_dataset_exploration.ipynb` | Dataset EDA and sample inspection | Dev/training env | Yes |
+| `notebooks/02_model_understanding.ipynb` | Qwen2-VL architecture walkthrough | Dev/training env | Yes |
+| `notebooks/03_data_preprocessing.ipynb` | Data formatting and chat-template pipeline | Dev/training env | Yes |
+| `notebooks/04_evaluation_analysis.ipynb` | Evaluation metrics and IoU interpretation | Dev/training env + result files | Yes |
+| `notebooks/05_debug_dtype_issue.ipynb` | Dtype/device debugging notes | Dev/training env | Yes |
+| `notebooks/06_quantization_and_trainable_params.ipynb` | Quantization concepts and trainable parameter checks | Dev/training env | Yes |
+| `notebooks/07_deployment_vllm_triton.ipynb` | Step-by-step vLLM/Triton deployment walkthrough | vLLM server for runnable vLLM cells; Triton/Docker optional for Triton cells | Partial |
+| `notebooks/08_vllm_performance_analysis.ipynb` | vLLM benchmark analysis and metric interpretation | Benchmark result files + (optional) running vLLM server | Partial |
+| `notebooks/09_vllm_memory_experiments.ipynb` | vLLM memory/concurrency experiments | Running vLLM server; GPU access | Partial |
+| `notebooks/10_Triton.ipynb` | Triton deployment and serving walkthrough | Triton server (usually Docker) | Partial |
+| `notebooks/debug_repetition_bug.ipynb` | Debug diary for output repetition bug | Dev/training env | Yes |
+| `notebooks/generate_golden_test_data.ipynb` | Generate golden test data for test fixtures | Dev/training env | Yes |
 
 ## 🏗️ Project Structure - Overview
 
@@ -220,39 +249,61 @@ vlm_Qwen2VL_object_detection/
 
 ## 📜 Scripts Folder
 
+> See [`scripts/README.md`](scripts/README.md) for detailed per-script documentation.
+
+### Training
+
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | `train_recipe.py` | Flexible recipe-based training with CLI args | **Recommended** for all training runs |
 | `train.py` | Simple training script (~150 lines) with hardcoded config | Learning the codebase, quick experiments |
 | `run_recipes.sh` | Bash wrapper with simpler syntax | Convenience for running recipes |
 
-### `train_recipe.py` (Recommended)
-Full-featured training with command-line arguments:
-```bash
-python scripts/train_recipe.py --recipe r4-joint --gpu 0,1 --epochs 3 --no-wandb
-```
-- Supports all 4 recipes (r1, r2, r3, r4)
-- GPU selection via `--gpu`
-- Configurable epochs, W&B toggle
+### Model Preparation
 
-### `train.py` (AllTokensCollator)
-Minimal script using `AllTokensCollator`:
-```bash
-python scripts/train.py
-```
-- Uses `AllTokensCollator`:
-  - Masks: pad tokens + vision tokens (`<|vision_start|>`, `<|vision_end|>`, `<|image_pad|>`)
-  - Trains on: all text tokens (system + user + assistant)
-- `train_recipe.py` uses `AssistantOnlyCollator`: Trains only on object category + bbox coordinates
-- See main notebook for collator comparison experiments
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `merge_lora.py` | Merge LoRA adapters into base model | Before deployment or quantization |
+| `quantize_model_gptq.py` | GPTQ INT4 quantization of merged model | Creating quantized model for faster inference (requires `gptqmodel>=2.2.0`) |
 
-### `run_recipes.sh` (Convenience)
-Bash wrapper with shorter syntax:
-```bash
-./scripts/run_recipes.sh r4 0,1      # Run r4-joint on GPUs 0,1
-./scripts/run_recipes.sh all         # Run all recipes sequentially
-./scripts/run_recipes.sh parallel    # Run r1 and r4 in parallel (4 GPUs)
-```
+### Serving & Deployment
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `serve_vllm.py` | Start standalone vLLM OpenAI-compatible server | Local development, standalone serving |
+| `deploy_triton.sh` | Start Triton via Docker with pre-flight checks | Alternative to Dockerfile for manual deployment |
+| `setup_triton.py` | Generate Triton config files from CLI args | Initial config generation (configs now maintained by hand in `triton_model_repository/`) |
+
+### Benchmarking & Evaluation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `benchmark_vllm.py` | Benchmark standalone vLLM (latency, throughput, concurrency sweeps) | Evaluating vLLM serving performance |
+| `benchmark_triton.py` | Benchmark Triton HTTP `/generate` endpoint (async, concurrency) | Evaluating Triton deployment performance |
+| `benchmark_hf_baseline.py` | Benchmark HuggingFace Transformers baseline (static batching) | Comparing against vLLM/Triton |
+| `evaluate_vllm_accuracy.py` | Evaluate vLLM accuracy with IoU metrics on validation set | Accuracy evaluation after deployment |
+| `establish_baseline.py` | Establish baseline accuracy for quantization comparison | Before/after quantization comparison |
+| `validate_triton_accuracy.py` | Validate Triton deployment produces correct outputs | Sanity check after Triton deployment |
+
+### Quick Tests
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `quick_test_vllm_api.py` | Send 1 request to vLLM, print raw output | Smoke test: is the server responding? |
+| `quick_test_vllm_with_visualization.py` | Send 1 request + parse bbox + draw on image | Smoke test with visual verification |
+
+### Common Workflows
+
+| Task | One-liner |
+|------|-----------|
+| Train best recipe (r4-joint) | `python scripts/train_recipe.py --recipe r4-joint --gpu 0,1` |
+| Merge LoRA adapter to standalone BF16 model | `python scripts/merge_lora.py --adapter-path <adapter_dir> --output-path <merged_dir>` |
+| Quantize merged model to GPTQ INT4 | `python scripts/quantize_model_gptq.py --model-path <merged_dir> --output-path <gptq_dir>` |
+| Start standalone vLLM server | `python scripts/serve_vllm.py --gpu 0 --port 8000` |
+| Quick API sanity check | `python scripts/quick_test_vllm_api.py` |
+| Benchmark standalone vLLM | `python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images` |
+| Benchmark Triton | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
+| Validate Triton vs baseline | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
 
 ## 🧪 Training Recipes
 
@@ -438,7 +489,8 @@ Quantize the merged model for faster inference and lower VRAM usage:
 
 ```bash
 # Quantization environment (contains vLLM + GPTQModel)
-conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+conda activate qwen2vl_nutrition_vllm_serving
+# Optional local path activation (machine-specific): conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
 
 # Verify GPTQModel is installed
 python -c "import gptqmodel; print('gptqmodel is available')"
@@ -461,7 +513,8 @@ python scripts/quantize_model_gptq.py \
 For quick local serving without Docker or Triton, use vLLM directly:
 
 ```bash
-conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+conda activate qwen2vl_nutrition_vllm_serving
+# Optional local path activation (machine-specific): conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
 
 # Serve BF16 model
 python scripts/serve_vllm.py --gpu 0

@@ -52,6 +52,29 @@ Training, serving, benchmarking, and evaluation scripts for Qwen2-VL nutrition t
 
 ---
 
+### Quick Reference (All Scripts)
+
+| Script | What It Does | Example Command |
+|--------|---------------|-----------------|
+| `train_recipe.py` | Main production training entrypoint for r1/r2/r3/r4 recipes | `python scripts/train_recipe.py --recipe r4-joint --gpu 0,1` |
+| `train.py` | Minimal training script for quick codebase learning | `python scripts/train.py` |
+| `run_recipes.sh` | Convenience wrapper for common recipe runs | `./scripts/run_recipes.sh r4 0,1` |
+| `merge_lora.py` | Merge LoRA adapter into standalone BF16 model | `python scripts/merge_lora.py --adapter-path <adapter_dir> --output-path <merged_dir>` |
+| `quantize_model_gptq.py` | Quantize merged BF16 model to GPTQ INT4 | `python scripts/quantize_model_gptq.py --model-path <merged_dir> --output-path <gptq_dir>` |
+| `serve_vllm.py` | Launch local vLLM OpenAI-compatible server | `python scripts/serve_vllm.py --gpu 0 --port 8000` |
+| `deploy_triton.sh` | Manual Docker-run helper for Triton deployment (alternative path) | `./scripts/deploy_triton.sh --single gptq --detach` |
+| `setup_triton.py` | Bootstrap script to generate Triton repo files (`config.pbtxt` + `model.json`) | `python scripts/setup_triton.py --model <merged_dir> --repo <triton_repo_dir>` |
+| `benchmark_hf_baseline.py` | Measure HuggingFace baseline throughput/latency | `python scripts/benchmark_hf_baseline.py --batch-size 1 --num-images 20 --warmup 3` |
+| `benchmark_vllm.py` | Benchmark standalone vLLM serving | `python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images` |
+| `benchmark_triton.py` | Benchmark Triton HTTP/gRPC endpoints | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
+| `establish_baseline.py` | Build BF16 baseline outputs for quantization drift comparison | `python scripts/establish_baseline.py --num-samples 100 --output-dir <out_dir>` |
+| `evaluate_vllm_accuracy.py` | Evaluate vLLM model accuracy and optional baseline drift | `python scripts/evaluate_vllm_accuracy.py --num-samples 100 --model-type gptq-int4 --compare-baseline` |
+| `validate_triton_accuracy.py` | Compare Triton outputs against vLLM baseline outputs | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
+| `quick_test_vllm_api.py` | One-shot smoke test for vLLM API response | `python scripts/quick_test_vllm_api.py` |
+| `quick_test_vllm_with_visualization.py` | vLLM smoke test with local bbox parsing + visualization output | `python scripts/quick_test_vllm_with_visualization.py` |
+
+---
+
 ## train_recipe.py (Recommended)
 
 Full-featured training supporting all 4 recipes with command-line arguments.
@@ -112,6 +135,166 @@ Bash wrapper around `train_recipe.py` with shorter syntax.
 ./scripts/run_recipes.sh r4 0,1      # Run r4-joint on GPUs 0,1
 ./scripts/run_recipes.sh all         # Run all recipes sequentially
 ./scripts/run_recipes.sh parallel    # Run r1 and r4 in parallel (4 GPUs)
+```
+
+---
+
+## merge_lora.py
+
+Merge LoRA adapter weights into the base Qwen2-VL model to create a standalone model.
+
+```bash
+python scripts/merge_lora.py \
+    --adapter-path <adapter_dir> \
+    --output-path <merged_dir>
+```
+
+---
+
+## quantize_model_gptq.py
+
+Quantize a merged BF16 model to GPTQ INT4. Requires `gptqmodel>=2.2.0` (installed in the serving environment).
+
+```bash
+python scripts/quantize_model_gptq.py \
+    --model-path <merged_dir> \
+    --output-path <gptq_dir> \
+    --num-calibration-samples 128
+```
+
+---
+
+## serve_vllm.py
+
+Start a standalone vLLM OpenAI-compatible server.
+
+```bash
+# Serve BF16 model
+python scripts/serve_vllm.py --gpu 0
+
+# Serve GPTQ INT4 model
+python scripts/serve_vllm.py --gpu 0 \
+    --model <gptq_dir> \
+    --quantization gptq_marlin --dtype float16
+
+# With custom settings
+python scripts/serve_vllm.py --gpu 0 --port 8000 \
+    --gpu-memory-utilization 0.9 --no-enable-prefix-caching
+```
+
+---
+
+## deploy_triton.sh
+
+Helper wrapper for starting Triton via Docker with pre-flight checks.
+
+```bash
+./scripts/deploy_triton.sh                    # Start with defaults
+./scripts/deploy_triton.sh --single gptq      # Single model mode (GPTQ only)
+./scripts/deploy_triton.sh --single bf16      # Single model mode (BF16 only)
+./scripts/deploy_triton.sh --detach           # Run in background
+```
+
+---
+
+## setup_triton.py
+
+Generate Triton config files (`config.pbtxt` + `model.json`) from CLI args.
+
+```bash
+python scripts/setup_triton.py \
+    --model <merged_dir> \
+    --repo <triton_repo_dir>
+```
+
+> **Note**: The generated configs in `triton_model_repository/` are now maintained by hand. This script is useful for initial bootstrapping.
+
+---
+
+## benchmark_vllm.py
+
+Benchmark standalone vLLM serving (latency, throughput, concurrency sweeps).
+
+```bash
+python scripts/benchmark_vllm.py \
+    --port 8000 --num-requests 20 --concurrency 8 --vary-images
+```
+
+---
+
+## benchmark_triton.py
+
+Benchmark Triton HTTP `/generate` endpoint (async, concurrency support).
+
+```bash
+python scripts/benchmark_triton.py \
+    --model qwen2vl_nutrition_gptq_int4 \
+    --endpoint http --num-requests 20 --concurrency 4 --vary-images
+```
+
+---
+
+## benchmark_hf_baseline.py
+
+Benchmark HuggingFace Transformers baseline with static batching.
+
+```bash
+python scripts/benchmark_hf_baseline.py \
+    --batch-size 1 --num-images 20 --warmup 3
+```
+
+---
+
+## establish_baseline.py
+
+Build BF16 baseline outputs for quantization drift comparison.
+
+```bash
+python scripts/establish_baseline.py \
+    --num-samples 100 --output-dir <out_dir>
+```
+
+---
+
+## evaluate_vllm_accuracy.py
+
+Evaluate vLLM model accuracy with IoU metrics and optional baseline drift comparison.
+
+```bash
+python scripts/evaluate_vllm_accuracy.py \
+    --num-samples 100 --model-type gptq-int4 --compare-baseline
+```
+
+---
+
+## validate_triton_accuracy.py
+
+Compare Triton outputs against vLLM baseline outputs.
+
+```bash
+python scripts/validate_triton_accuracy.py \
+    --model qwen2vl_nutrition_gptq_int4 \
+    --baseline <bf16_baseline.json>
+```
+
+---
+
+## quick_test_vllm_api.py
+
+Minimal one-request smoke test — is the vLLM server responding?
+
+```bash
+python scripts/quick_test_vllm_api.py
+```
+
+---
+
+## quick_test_vllm_with_visualization.py
+
+Smoke test with bbox parsing and visualization output.
+
+```bash
+python scripts/quick_test_vllm_with_visualization.py
 ```
 
 ---
