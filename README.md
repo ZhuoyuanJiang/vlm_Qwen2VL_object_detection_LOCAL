@@ -141,15 +141,28 @@ trainer = SFTTrainer(
 
 ```
 vlm_Qwen2VL_object_detection/
+├── Dockerfile                    # Triton deployment image (see Deployment section)
+├── docker/
+│   └── entrypoint.sh             # Model selection + Triton startup script
 ├── src/                          # Modular source code
 │   ├── data/                     # Dataset preparation & collation
 │   ├── models/                   # Model loading & configuration
 │   ├── training/                 # Training utilities & evaluation
 │   └── utils/                    # GPU management & visualization
-├── scripts/                      # Training scripts (see below for details)
+├── scripts/                      # Training & deployment scripts
 │   ├── train.py                  # Simple single-config training
 │   ├── train_recipe.py           # Flexible recipe-based training (recommended)
-│   └── run_recipes.sh            # Bash wrapper for train_recipe.py
+│   ├── run_recipes.sh            # Bash wrapper for train_recipe.py
+│   ├── benchmark_triton.py       # Triton HTTP benchmark (async)
+│   ├── benchmark_vllm.py         # Standalone vLLM benchmark
+│   └── serve_vllm.py             # Standalone vLLM serving wrapper
+├── triton_model_repository/      # Triton Inference Server configs
+│   ├── qwen2vl_nutrition_gptq_int4/  # GPTQ INT4 model config
+│   │   ├── config.pbtxt
+│   │   └── 1/model.json
+│   └── qwen2vl_nutrition_bf16/       # BF16 model config
+│       ├── config.pbtxt
+│       └── 1/model.json
 ├── tests/                        # Test suite
 │   ├── test_data_format_before_chat_template.py
 │   └── test_golden_output.py
@@ -160,7 +173,7 @@ vlm_Qwen2VL_object_detection/
 │   ├── 04_evaluation_analysis.ipynb      # Model evaluation and metrics
 │   ├── 05_debug_dtype_issue.ipynb        # Debugging dtype/device issues
 │   └── 06_quantization_and_trainable_params.ipynb  # Quantization deep dive
-└── refactor_documentation/       # Development history (23 sessions)
+└── refactor_documentation/       # Development history (33 sessions)
 ```
 
 ## 📂 Project Structure - Detailed (src/)
@@ -351,6 +364,94 @@ Running `scripts/train_recipe.py` creates outputs in `/ssd1/zhuoyuan/vlm_outputs
 **Note**: r3-two-stage creates two outputs (`-r3-stage1` and `-r3-stage2`) because it runs sequentially.
 
 **Storage Strategy**: All large files on SSD to preserve home directory quota (~100GB).
+
+## 🚢 Deployment (Triton Inference Server)
+
+The fine-tuned model can be deployed as a production inference server using NVIDIA Triton with vLLM backend. A Dockerfile is provided for reproducible deployment.
+
+### Prerequisites
+
+- Docker with GPU support ([NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
+- GPU with 8GB+ VRAM for GPTQ INT4, or 16GB+ for BF16
+- Model weights (download from HuggingFace — see below)
+
+### Quick Start
+
+```bash
+# 1. Build the Docker image
+docker build -t qwen2vl-triton .
+
+# 2. Download model weights from HuggingFace
+#    GPTQ INT4 (~6.5 GB):
+git clone https://huggingface.co/<org>/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4 /path/to/gptq-weights
+#    BF16 full-precision (~15.5 GB):
+git clone https://huggingface.co/<org>/qwen2vl-nutrition-detection-r4-joint-merged /path/to/bf16-weights
+
+# 3. Start the inference server (GPTQ INT4 — faster, recommended)
+docker run --gpus all --rm -d --shm-size=4G \
+    -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+    -v /path/to/gptq-weights:/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4:ro \
+    qwen2vl-triton gptq
+
+# 4. Verify the server is running
+curl http://localhost:8000/v2/health/live
+```
+
+### Model Options
+
+| Argument | Model | VRAM | Latency (P50) | Use Case |
+|----------|-------|------|---------------|----------|
+| `gptq` (default) | GPTQ INT4 | ~6.5 GB | ~310 ms | Production (faster) |
+| `bf16` | BF16 full-precision | ~15.5 GB | ~538 ms | Accuracy baseline |
+| `both` | Both models | ~22 GB (2 GPUs) | — | A/B testing |
+
+### Sending Inference Requests
+
+```bash
+# Encode an image to base64
+IMAGE_B64=$(base64 -w0 test_image.jpg)
+
+# Send request to the /generate endpoint
+curl -X POST http://localhost:8000/v2/models/qwen2vl_nutrition_gptq_int4/generate \
+    -H "Content-Type: application/json" \
+    -d "{\"text_input\": \"Detect the nutrition facts table.\", \"image\": \"${IMAGE_B64}\", \"parameters\": {\"temperature\": 0, \"max_tokens\": 100}}"
+```
+
+### Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 8000 | HTTP | REST API (`/v2/models/{name}/generate`) |
+| 8001 | gRPC | gRPC API |
+| 8002 | HTTP | Prometheus metrics |
+
+### How It Works
+
+The `Dockerfile` extends `nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3` and bakes in the model configs (`config.pbtxt` + `model.json`). At runtime, `docker/entrypoint.sh` copies the selected model's config into Triton's model repository and starts the server. Model weights are mounted via `-v` (not included in the image due to size).
+
+For detailed deployment documentation, see [`refactor_documentation/PROGRESS_20260206_SESSION32.md`](refactor_documentation/PROGRESS_20260206_SESSION32.md).
+
+### Running Benchmarks
+
+Benchmarks run on the **host machine** (not inside Docker). Install client-side dependencies first:
+
+```bash
+pip install -r requirements_triton_benchmark.txt --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+Then run:
+
+```bash
+# GPTQ INT4: concurrency=1, 20 requests, varied images (unbiased)
+python scripts/benchmark_triton.py \
+    --model qwen2vl_nutrition_gptq_int4 \
+    --concurrency 1 --num-requests 20 --vary-images
+
+# BF16: same settings
+python scripts/benchmark_triton.py \
+    --model qwen2vl_nutrition_bf16 \
+    --concurrency 1 --num-requests 20 --vary-images
+```
 
 ## 🔍 Troubleshooting
 
