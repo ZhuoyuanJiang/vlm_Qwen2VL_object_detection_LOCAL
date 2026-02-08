@@ -293,7 +293,9 @@ python scripts/train_recipe.py --recipe r4-joint --gpu 4,5
 
 ## 📈 Performance Results
 
-Based on evaluation of 50 test samples:
+### Training Accuracy
+
+Based on evaluation of 50 test samples (HuggingFace inference):
 
 | Metric | r4-joint (Best) |
 |--------|-----------------|
@@ -302,6 +304,41 @@ Based on evaluation of 50 test samples:
 | **Detection Rate** | 100% |
 | **IoU > 0.5** | 92% |
 | **IoU > 0.7** | 88% |
+
+### Serving Accuracy (vLLM, 100 validation samples)
+
+| Metric | BF16 | GPTQ INT4 | Drift |
+|--------|------|-----------|-------|
+| **Mean IoU** | 0.846 | 0.840 | -0.7% |
+| **Detection Rate** | 100% | 100% | — |
+| **IoU > 0.5** | — | 91% | — |
+| **IoU > 0.7** | — | 86% | — |
+
+GPTQ INT4 quantization has minimal accuracy loss (<1% IoU drift) compared to BF16.
+
+### Inference Latency and Throughput
+
+**Triton Inference Server on RTX 4090** (unbiased: varied images, prefix caching disabled):
+
+| Model | Concurrency | P50 Latency | Throughput |
+|-------|-------------|-------------|------------|
+| GPTQ INT4 | c=1 | 470 ms | 1.65 req/s |
+| GPTQ INT4 | c=4 | 1,013 ms | 3.94 req/s |
+| BF16 | c=1 | 703 ms | 1.19 req/s |
+| BF16 | c=4 | 1,236 ms | 3.23 req/s |
+
+**Standalone vLLM on RTX 3090** (unbiased, no prefix caching):
+
+| Model | Concurrency | P50 Latency | Throughput |
+|-------|-------------|-------------|------------|
+| BF16 | c=1 | 907 ms | 1.09 req/s |
+| BF16 | c=8 | 2,138 ms | 3.17 req/s |
+
+**Key takeaways:**
+- GPTQ INT4 is ~1.5x faster than BF16 at P50 latency (470ms vs 703ms)
+- RTX 4090 is ~1.7x faster than RTX 3090 for the same model
+- Higher concurrency increases throughput but also per-request latency
+- Triton accuracy (mean IoU) not yet verified — pending (since Triton wraps vLLM, results should be identical)
 
 ## 🔧 Configuration
 
