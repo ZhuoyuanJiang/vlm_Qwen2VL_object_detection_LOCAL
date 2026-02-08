@@ -1,14 +1,54 @@
 # Scripts
 
-Training scripts for Qwen2-VL nutrition table detection.
+Training, serving, benchmarking, and evaluation scripts for Qwen2-VL nutrition table detection.
 
 ## Files
+
+### Training
 
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
 | `train_recipe.py` | Flexible recipe-based training with CLI args | **Recommended** for all training runs |
 | `train.py` | Simple training script (~150 lines) with hardcoded config | Learning the codebase, quick experiments |
 | `run_recipes.sh` | Bash wrapper with simpler syntax | Convenience for running recipes |
+
+### Model Preparation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `merge_lora.py` | Merge LoRA adapters into base model | Before deployment or quantization |
+| `quantize_model_gptq.py` | GPTQ INT4 quantization of merged model | Creating quantized model for faster inference |
+
+### Serving
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `serve_vllm.py` | Start standalone vLLM server | Local development, standalone serving |
+| `deploy_triton.sh` | Start Triton via Docker with pre-flight checks | Alternative to Dockerfile for manual deployment |
+| `setup_triton.py` | Generate Triton config files (`config.pbtxt` + `model.json`) from CLI args | Initial config generation (configs are now maintained by hand in `triton_model_repository/`) |
+
+### Benchmarking
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `benchmark_vllm.py` | Benchmark standalone vLLM (latency, throughput, concurrency sweeps) | Evaluating vLLM serving performance |
+| `benchmark_triton.py` | Benchmark Triton HTTP `/generate` endpoint (async, concurrency support) | Evaluating Triton deployment performance |
+| `benchmark_hf_baseline.py` | Benchmark HuggingFace Transformers baseline (static batching) | Comparing against vLLM/Triton |
+
+### Evaluation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `evaluate_vllm_accuracy.py` | Evaluate vLLM accuracy with IoU metrics on validation set | Accuracy evaluation after deployment |
+| `establish_baseline.py` | Establish baseline accuracy metrics for quantization comparison | Before/after quantization comparison |
+| `validate_triton_accuracy.py` | Validate Triton deployment produces correct outputs | Sanity check after Triton deployment |
+
+### Quick Tests
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `quick_test_vllm_api.py` | Send 1 request to vLLM, print raw output | Smoke test: is the server responding? |
+| `quick_test_vllm_with_visualization.py` | Send 1 request + parse bbox + draw on image | Smoke test with visual verification |
 
 ---
 
