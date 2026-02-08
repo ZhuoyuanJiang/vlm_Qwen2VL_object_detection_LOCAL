@@ -259,7 +259,7 @@ def test_triton_endpoint(
     print("Sending inference request...")
     try:
         resp = requests.post(
-            f"{base_url}/v2/models/{model_name}/infer",
+            f"{base_url}/v2/models/{model_name}/generate",
             json=payload,
             timeout=60,
         )

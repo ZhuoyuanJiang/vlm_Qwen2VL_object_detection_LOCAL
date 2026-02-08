@@ -1,3 +1,26 @@
+"""
+Minimal vLLM API smoke test for the nutrition-table detector.
+
+Purpose:
+    - Quickly verify that a running vLLM server accepts multimodal requests.
+    - Print the raw model text output for one sample image.
+
+When to use:
+    - Manual sanity check after starting/restarting vLLM.
+    - Quick connectivity/request-format debugging.
+
+When not to use:
+    - Not for throughput/latency benchmarking.
+    - Not for accuracy reporting across many samples.
+
+Usage:
+    python scripts/test_vllm_api.py
+
+Prerequisite:
+    A vLLM server is already running at http://localhost:8000
+    with served model name "qwen2vl-nutrition".
+"""
+
 import base64
 import requests
 from datasets import load_dataset

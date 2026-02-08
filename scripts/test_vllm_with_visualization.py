@@ -1,24 +1,29 @@
 """
-Test script for vLLM deployment of Qwen2-VL nutrition detection model.
+Manual vLLM smoke test with local bbox visualization.
 
-This script tests the vLLM server running on vllab8 and validates that
-the output matches the expected format from fine_tuning_vlm_for_object_detection_trl.py
+Purpose:
+    - Send one multimodal request to vLLM and inspect the returned text output.
+    - Parse bbox tokens and draw a local visualization for quick human checking.
 
-API-wise: Both this script and test_vllm_api.py make the EXACT SAME API call.
-The vLLM API only returns TEXT (bounding box coordinates as a string).
+Relation to test_vllm_api.py:
+    - Both scripts make the same vLLM API call.
+    - test_vllm_api.py prints raw output only.
+    - This script adds local post-processing (parse + draw + save image).
 
-Difference from test_vllm_api.py:
-    - test_vllm_api.py: Minimal script - calls API and prints raw text output
-    - This script: Same API call, but adds LOCAL post-processing:
-        1. Parses the text to extract bbox coordinates
-        2. Compares with ground truth from dataset
-        3. Uses PIL to draw the bbox on the original image
-        4. Saves visualization to /tmp/test_nutrition_result.jpg
+When to use:
+    - Manual sanity checks and demos.
+    - Fast debugging of output format and bbox plausibility.
 
-Expected output format (with skip_special_tokens=False):
-    <|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
+When not to use:
+    - Not a formal benchmark script.
+    - Not a batch accuracy evaluation pipeline.
 
-Where coordinates are normalized to [0, 1000] range (Qwen2-VL format).
+Usage:
+    python scripts/test_vllm_with_visualization.py
+
+Prerequisite:
+    A vLLM server is already running at http://localhost:8000
+    with served model name "qwen2vl-nutrition".
 """
 
 import base64
