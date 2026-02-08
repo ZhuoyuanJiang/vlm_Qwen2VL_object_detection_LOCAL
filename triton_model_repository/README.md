@@ -24,8 +24,8 @@ triton_model_repository/
 
 | Model | Endpoint | GPU | Size | Use Case |
 |-------|----------|-----|------|----------|
-| `qwen2vl_nutrition_bf16` | `/v2/models/qwen2vl_nutrition_bf16/infer` | 0 | ~15.5 GB | Accuracy baseline |
-| `qwen2vl_nutrition_gptq_int4` | `/v2/models/qwen2vl_nutrition_gptq_int4/infer` | 1 | ~6.5 GB | Production (faster) |
+| `qwen2vl_nutrition_bf16` | `/v2/models/qwen2vl_nutrition_bf16/generate` | 0 | ~15.5 GB | Accuracy baseline |
+| `qwen2vl_nutrition_gptq_int4` | `/v2/models/qwen2vl_nutrition_gptq_int4/generate` | 1 | ~6.5 GB | Production (faster) |
 
 ## Before Deployment: Update Paths!
 
@@ -69,7 +69,7 @@ docker run --gpus all --rm -it \
     -v /models/qwen2vl-nutrition-detection-r4-joint-merged:/models/qwen2vl-nutrition-detection-r4-joint-merged:ro \
     -v /models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4:/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4:ro \
     -v /workspace/triton_model_repository:/models/triton_repo \
-    nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 \
+    nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3 \
     tritonserver --model-repository=/models/triton_repo
 ```
 
@@ -109,7 +109,7 @@ payload = {
 model_name = "qwen2vl_nutrition_gptq_int4"  # or "qwen2vl_nutrition_bf16"
 
 response = requests.post(
-    f"http://localhost:8000/v2/models/{model_name}/infer",
+    f"http://localhost:8000/v2/models/{model_name}/generate",
     json=payload
 )
 print(response.json())
@@ -121,8 +121,8 @@ With both models loaded, you can compare outputs:
 
 ```python
 # Same image, same prompt -> compare outputs
-bf16_response = requests.post(".../qwen2vl_nutrition_bf16/infer", json=payload)
-gptq_response = requests.post(".../qwen2vl_nutrition_gptq_int4/infer", json=payload)
+bf16_response = requests.post(".../qwen2vl_nutrition_bf16/generate", json=payload)
+gptq_response = requests.post(".../qwen2vl_nutrition_gptq_int4/generate", json=payload)
 
 # Compare bounding box outputs
 print("BF16:", bf16_response.json())
@@ -139,7 +139,7 @@ print("GPTQ:", gptq_response.json())
 
 ## Important Notes
 
-1. **Use `/infer` not `/generate`**: For VLMs with image input, use the inference endpoint
+1. **Use `/generate` not `/infer`**: The vLLM backend requires decoupled mode, which only works with the `/generate` endpoint
 2. **Image format**: Base64-encoded JPEG/PNG
 3. **Decoupled mode**: The backend uses streaming protocol even for non-streaming requests
 4. **Chat template**: Apply chat template client-side or use raw prompts that match training format

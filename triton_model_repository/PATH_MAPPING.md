@@ -102,7 +102,7 @@ docker run --gpus all --rm -it \
     -p 8000:8000 -p 8001:8001 -p 8002:8002 \
     -v /models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4:/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4:ro \
     -v /workspace/triton_model_repository:/models/triton_repo \
-    nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 \
+    nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3 \
     tritonserver --model-repository=/models/triton_repo
 
 # 5. Test

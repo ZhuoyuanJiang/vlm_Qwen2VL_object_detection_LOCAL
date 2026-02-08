@@ -111,7 +111,7 @@
 #
 # 1. **Rent a cloud GPU** with Docker support (Lambda Labs, RunPod, Vast.ai)
 # 2. **Prepare configuration files** locally (config.pbtxt, model.json)
-# 3. **Deploy using NVIDIA's pre-built Triton image**: `nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3`
+# 3. **Deploy using NVIDIA's pre-built Triton image**: `nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3`
 #
 # ### Official Documentation
 # - [Triton Inference Server Docs](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/)

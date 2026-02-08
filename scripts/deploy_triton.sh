@@ -33,7 +33,7 @@ GPTQ_MODEL_PATH="/models/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4"
 TRITON_REPO_PATH="/workspace/triton_model_repository"
 
 # Docker image
-TRITON_IMAGE="nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3"
+TRITON_IMAGE="nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3"
 
 # Ports
 HTTP_PORT=8000

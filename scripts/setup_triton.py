@@ -20,7 +20,7 @@ After running this script, launch Triton with:
         -p 8000:8000 -p 8001:8001 -p 8002:8002 \\
         -v /ssd1/zhuoyuan/vlm_outputs:/ssd1/zhuoyuan/vlm_outputs:ro \\
         -v /ssd1/zhuoyuan/triton_model_repository:/models \\
-        nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 \\
+        nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3 \\
         tritonserver --model-repository=/models
 """
 
@@ -237,7 +237,7 @@ def main():
     -p 8000:8000 -p 8001:8001 -p 8002:8002 \\
     -v {args.model}:{args.model}:ro \\
     -v {repo_path}:/models \\
-    nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 \\
+    nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3 \\
     tritonserver --model-repository=/models"""
 
     print(docker_cmd)
@@ -248,7 +248,7 @@ def main():
     print("Health:    http://localhost:8000/v2/health/live")
     print(f"Model:     http://localhost:8000/v2/models/{args.model_name}")
     print("Metrics:   http://localhost:8002/metrics")
-    print("Inference: http://localhost:8000/v2/models/{}/infer".format(args.model_name))
+    print("Inference: http://localhost:8000/v2/models/{}/generate".format(args.model_name))
 
 
 if __name__ == "__main__":

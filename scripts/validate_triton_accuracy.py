@@ -151,7 +151,7 @@ def send_triton_request(
         ]
     }
 
-    endpoint = f"{url}/v2/models/{model_name}/infer"
+    endpoint = f"{url}/v2/models/{model_name}/generate"
 
     start_time = time.perf_counter()
     try:
