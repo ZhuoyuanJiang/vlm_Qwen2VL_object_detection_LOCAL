@@ -31,6 +31,20 @@
 # - Docker installed (for vLLM and Triton servers)
 
 # %% [markdown]
+# ## Execution Scope (Important)
+#
+# Use the following execution scope when reading or running this notebook:
+#
+# - **Section 1-3 (vLLM path)**: can be executed on this machine once a vLLM server is running.
+# - **Section 4 (Triton path)**: treated as a deployment playbook here.
+#   Running Triton live requests requires a Docker-capable environment.
+# - If Triton cannot run on this machine, still keep Section 4 for exact config/command reference.
+#
+# Verified Triton runs and benchmark records are documented in:
+# - `refactor_documentation/PROGRESS_20260206_SESSION32.md`
+# - `refactor_documentation/PROGRESS_20260207_SESSION33.md`
+
+# %% [markdown]
 # ### ⚠️ IMPORTANT: Docker-Based Deployment
 #
 # **This notebook uses Docker for vLLM and Triton servers.**
@@ -80,11 +94,15 @@ MERGED_MODEL_PATH = "/ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-j
 VLLM_HOST = "0.0.0.0"
 VLLM_PORT = 8000
 VLLM_MODEL_NAME = "qwen2vl-nutrition"  # Name to use in API calls
+VLLM_DOCKER_IMAGE = "vllm/vllm-openai:v0.6.4.post1"
 
 # Triton settings
 TRITON_MODEL_REPO = "/ssd1/zhuoyuan/triton_model_repository"
 TRITON_MODEL_NAME = "qwen2vl_nutrition"
-TRITON_PORT = 8001  # gRPC port
+TRITON_HTTP_PORT = 8000
+TRITON_GRPC_PORT = 8001
+TRITON_METRICS_PORT = 8002
+TRITON_DOCKER_IMAGE = "nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3"
 
 # ============================================================
 print("Configuration loaded!")
@@ -95,62 +113,42 @@ print(f"  Merged model path: {MERGED_MODEL_PATH}")
 # %% [markdown]
 # ### 1.2 GPU Configuration
 #
-# Set up CUDA before importing torch.
+# Choose GPU device(s) explicitly for Docker commands.
+# This is safer on shared servers than auto-selecting GPUs.
 
 # %%
 import os
-import sys
 import subprocess
 
 # Memory management
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-MAX_GPUS = 2  # Maximum GPUs to use
+# Set this manually, e.g. "0" or "0,1"
+DOCKER_GPU_DEVICE = os.environ.get("DOCKER_GPU_DEVICE", "0")
 
 print("=" * 60)
 print("GPU CONFIGURATION")
 print("=" * 60)
+print(f"Docker GPU device(s): {DOCKER_GPU_DEVICE}")
+print("Tip: set before starting notebook, e.g. `export DOCKER_GPU_DEVICE=1`")
 
-
-def find_available_gpus(num_gpus_needed=2):
-    """Find available GPUs by checking memory usage."""
-    try:
-        result = subprocess.run(
-            ['nvidia-smi', '--query-gpu=index,memory.used,memory.total,name',
-             '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, check=True
-        )
-
-        available = []
-        print("\nGPU Status:")
-        for line in result.stdout.strip().split('\n'):
-            parts = [p.strip() for p in line.split(',')]
-            gpu_idx = int(parts[0])
-            mem_used = int(parts[1])
-            mem_total = int(parts[2])
-            gpu_name = parts[3] if len(parts) > 3 else "Unknown"
-
-            status = "AVAILABLE" if mem_used < 2000 and mem_total > 40000 else "IN USE"
-            print(f"  GPU {gpu_idx}: {gpu_name} - {mem_used}MB/{mem_total}MB [{status}]")
-
-            if mem_used < 2000 and mem_total > 40000:
-                available.append(gpu_idx)
-
-        return available[:num_gpus_needed] if len(available) >= num_gpus_needed else available
-
-    except Exception as e:
-        print(f"Error checking GPUs: {e}")
-        return []
-
-
-available_gpus = find_available_gpus(MAX_GPUS)
-
-if len(available_gpus) > 0:
-    gpu_str = ",".join(map(str, available_gpus))
-    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_str
-    print(f"\n✓ Using GPU(s): {gpu_str}")
-else:
-    print("\n⚠ No available GPUs found! Using whatever is set.")
+try:
+    result = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    print("\nCurrent GPU status:")
+    for line in result.stdout.strip().split("\n"):
+        gpu_idx, gpu_name, mem_used, mem_total = [p.strip() for p in line.split(",")]
+        print(f"  GPU {gpu_idx}: {gpu_name} - {mem_used}MB/{mem_total}MB")
+except Exception as e:
+    print(f"\nCould not query nvidia-smi: {e}")
 
 # %% [markdown]
 # ### 1.3 Install Dependencies
@@ -319,6 +317,10 @@ else:
 # - OpenAI-compatible `/v1/chat/completions` endpoint
 # - PagedAttention for efficient memory management
 # - Continuous batching for high throughput
+#
+# **Execution note**:
+# - This section is expected to produce live outputs if `http://localhost:8000` has a running vLLM server.
+# - If no server is running, request cells may skip or report connection errors by design.
 
 # %% [markdown]
 # ### 3.1 Launch vLLM Server
@@ -378,16 +380,17 @@ import time
 import requests
 
 # Build the Docker command for vLLM
-docker_vllm_cmd = f"""docker run --gpus all -d --name vllm-server \\
+docker_vllm_cmd = f"""docker run --gpus '"device={DOCKER_GPU_DEVICE}"' -d --name vllm-server \\
   -p {VLLM_PORT}:8000 \\
   -v {MERGED_MODEL_PATH}:/model:ro \\
   --ipc=host \\
-  vllm/vllm-openai:v0.6.4.post1 \\
+  {VLLM_DOCKER_IMAGE} \\
   --model /model \\
   --served-model-name {VLLM_MODEL_NAME} \\
   --dtype bfloat16 \\
   --trust-remote-code \\
-  --max-model-len 4096"""
+  --max-model-len 4096 \\
+  --limit-mm-per-prompt '{{"image":1}}'"""
 
 print("=" * 60)
 print("vLLM Docker Launch Command")
@@ -403,6 +406,16 @@ print("  docker logs -f vllm-server    # View logs")
 print("  docker stop vllm-server       # Stop server")
 print("  docker rm vllm-server         # Remove container")
 print("=" * 60)
+
+# %% [markdown]
+# ### Run-All Prerequisite (vLLM)
+#
+# If you plan to click **Run All**, start a vLLM server first in a separate terminal.
+# Otherwise, vLLM inference cells will be skipped/fail due to no server at `localhost:8000`.
+#
+# Quick check target used by this notebook:
+# - Health: `http://localhost:8000/health`
+# - API: `http://localhost:8000/v1/chat/completions`
 
 # %% [markdown]
 # ### 3.1.1 Launch vLLM (Docker)
@@ -448,17 +461,12 @@ client = OpenAI(
     api_key="dummy",  # vLLM doesn't need a real key
 )
 
-# Test prompt (same as training)
-SYSTEM_PROMPT = """You are a nutrition label detector. Your task is to identify nutrition tables/panels in food product images.
+# Training-aligned prompt (same wording used in data preprocessing / benchmark scripts)
+SYSTEM_PROMPT = """You are a Vision Language Model specialized in interpreting visual data from product images.
+Your task is to analyze the provided product images and detect the nutrition tables in a certain format.
+Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
 
-When you detect a nutrition table, output its location using this exact format:
-<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>
-
-Coordinates are in [0,1000) range where (0,0) is top-left.
-If no nutrition table is found, say "No nutrition table detected."
-"""
-
-USER_PROMPT = "Detect the bounding box coordinates for the nutrition facts table in this image."
+USER_PROMPT = "Detect the bounding box of the nutrition table."
 
 
 def encode_image_to_base64(image_path):
@@ -522,7 +530,7 @@ print("To test, either:")
 print("1. Set test_image = '/path/to/your/nutrition_label_image.jpg'")
 print("2. Or use the dataset:")
 print("   from datasets import load_dataset")
-print("   ds = load_dataset('openfoodfacts/nutrition-table-detection', split='test')")
+print("   ds = load_dataset('openfoodfacts/nutrition-table-detection', split='val')")
 print("   ds[0]['image'].save('/tmp/test_nutrition.jpg')")
 print("   test_image = '/tmp/test_nutrition.jpg'")
 
@@ -535,7 +543,7 @@ print("   test_image = '/tmp/test_nutrition.jpg'")
 # # Load test image from dataset
 # from datasets import load_dataset
 
-# ds = load_dataset("openfoodfacts/nutrition-table-detection", split="test")
+# ds = load_dataset("openfoodfacts/nutrition-table-detection", split="val")
 # ds[0]['image'].save('/tmp/test_nutrition.jpg')
 
 # test_image = "/tmp/test_nutrition.jpg"
@@ -603,14 +611,13 @@ print(requests_example)
 # This shows the **actual raw API call** (not using wrapper function).
 # We use a different test image to demonstrate.
 
-
 import requests
 import base64
 from datasets import load_dataset
 
-# Load a DIFFERENT test image (index 5 instead of 0)
-print("Loading test image (sample #5 from dataset)...")
-ds = load_dataset("openfoodfacts/nutrition-table-detection", split="test")
+# Load a DIFFERENT validation image (index 5 instead of 0)
+print("Loading validation image (sample #5 from dataset)...")
+ds = load_dataset("openfoodfacts/nutrition-table-detection", split="val")
 ds[5]['image'].save('/tmp/test_api_example.jpg')
 print("Saved to /tmp/test_api_example.jpg")
 
@@ -620,81 +627,37 @@ with open('/tmp/test_api_example.jpg', 'rb') as f:
 
 print(f"Image encoded: {len(img_b64)} characters")
 
-# Make the actual API call
-print("\nSending request to vLLM API...")
-response = requests.post(
-    f"http://localhost:{VLLM_PORT}/v1/chat/completions",
-    json={
-        "model": VLLM_MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": USER_PROMPT}
-            ]}
-        ],
-        "max_tokens": 256,
-        "temperature": 0.0
-    },
-    timeout=60
-)
+# Make the actual API call (skip gracefully if server isn't running)
+if check_vllm_server(VLLM_PORT):
+    print("\nSending request to vLLM API...")
+    try:
+        response = requests.post(
+            f"http://localhost:{VLLM_PORT}/v1/chat/completions",
+            json={
+                "model": VLLM_MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                        {"type": "text", "text": USER_PROMPT}
+                    ]}
+                ],
+                "max_tokens": 256,
+                "temperature": 0.0
+            },
+            timeout=60
+        )
+        response.raise_for_status()
 
-# Show the result
-print("\n" + "="*50)
-print("API Response:")
-print("="*50)
-result = response.json()
-print(f"Model output: {result['choices'][0]['message']['content']}")
-
-# %% [markdown]
-# ### 3.3.1 Real API Call Example
-#
-
-# %%
-# This shows the **actual raw API call** (not using wrapper function).
-# We use a different test image to demonstrate.
-
-import requests
-import base64
-from datasets import load_dataset
-
-# Load a DIFFERENT test image (index 5 instead of 0)
-print("Loading test image (sample #5 from dataset)...")
-ds = load_dataset("openfoodfacts/nutrition-table-detection", split="test")
-ds[5]['image'].save('/tmp/test_api_example.jpg')
-print("Saved to /tmp/test_api_example.jpg")
-
-# Encode to base64
-with open('/tmp/test_api_example.jpg', 'rb') as f:
-    img_b64 = base64.b64encode(f.read()).decode()
-
-print(f"Image encoded: {len(img_b64)} characters")
-
-# Make the actual API call
-print("\nSending request to vLLM API...")
-response = requests.post(
-    f"http://localhost:{VLLM_PORT}/v1/chat/completions",
-    json={
-        "model": VLLM_MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": USER_PROMPT}
-            ]}
-        ],
-        "max_tokens": 256,
-        "temperature": 0.0
-    },
-    timeout=60
-)
-
-# Show the result
-print("\n" + "="*50)
-print("API Response:")
-print("="*50)
-result = response.json()
-print(f"Model output: {result['choices'][0]['message']['content']}")
+        print("\n" + "="*50)
+        print("API Response:")
+        print("="*50)
+        result = response.json()
+        print(f"Model output: {result['choices'][0]['message']['content']}")
+    except Exception as e:
+        print(f"Request failed: {e}")
+else:
+    print("Skipping raw API call because vLLM server is not running.")
 
 
 # %% [markdown]
@@ -739,8 +702,23 @@ def stop_vllm_docker():
 # - Multi-model serving
 # - HTTP/gRPC endpoints
 # - Ensemble support
+#
+# **Execution note**:
+# - On machines without Docker permission, treat this section as a reproducible setup guide.
+# - You can still generate/read `model.json` and `config.pbtxt` locally.
+# - Live Triton inference cells require a running Triton server (typically Docker-based).
 
 # %% [markdown]
+# ### Run-All Prerequisite (Triton)
+#
+# To get real Triton inference outputs, start Triton in another terminal before
+# calling Triton test functions.
+#
+# This notebook still prints Triton setup commands/configs without a running Triton server,
+# but live requests require:
+# - Health: `http://localhost:8000/v2/health/live`
+# - API: `http://localhost:8000/v2/models/{model_name}/generate`
+
 # ### 4.1 Create Model Repository
 #
 # Triton requires a specific directory structure.
@@ -765,11 +743,15 @@ print(f"Creating Triton model repository at: {repo_path}")
 # vLLM configuration for Triton
 model_json = {
     "model": MERGED_MODEL_PATH,
+    "tokenizer_mode": "auto",
+    "trust_remote_code": True,
     "dtype": "bfloat16",
     "tensor_parallel_size": 1,  # Set to 2 if using 2 GPUs
-    "gpu_memory_utilization": 0.8,  # Use 80% of GPU memory
+    "gpu_memory_utilization": 0.9,
     "max_model_len": 4096,
-    "trust_remote_code": True,
+    "limit_mm_per_prompt": {"image": 1},
+    # Set False for unbiased benchmarking; set True for repeated-image serving workloads
+    "enable_prefix_caching": False,
 }
 
 model_json_path = model_path / "model.json"
@@ -783,6 +765,31 @@ print(json.dumps(model_json, indent=2))
 # ### 4.3 Create config.pbtxt
 #
 # This file configures Triton's handling of the model.
+#
+# **Source of truth for supported inputs/behavior**:
+# - The available inputs are defined by the **vLLM backend implementation**, not by Triton core.
+# - vLLM backend source:  
+#   https://github.com/triton-inference-server/vllm_backend/blob/main/src/model.py
+#
+# In this notebook we use `/generate` examples for the vLLM backend, especially when
+# `model_transaction_policy { decoupled: true }` is enabled.
+#
+# **Conceptual Summary**:
+# - **Triton** is the serving framework:
+#   - It manages model lifecycle, request routing, HTTP/gRPC APIs, and metrics.
+#   - It does **not** define backend-specific input names by itself.
+# - **vLLM backend** is the execution plugin behind `backend: "vllm"`:
+#   - It defines which input fields are actually supported (for example:
+#     `text_input`, `image`, `sampling_parameters`, `stream`).
+#   - Therefore, the source of truth is the backend implementation (`model.py`),
+#     not guessed `config.pbtxt` fields.
+# - Why we emphasize `/generate`:
+#   - This notebook enables decoupled transaction policy in `config.pbtxt`.
+#   - With vLLM backend in this mode, `/generate` is the expected endpoint pattern.
+#
+# Related docs:
+# - Triton vLLM backend README  
+#   https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/vllm_backend/README.html
 
 # %%
 config_pbtxt = f'''name: "{TRITON_MODEL_NAME}"
@@ -809,6 +816,18 @@ input [
     data_type: TYPE_STRING
     dims: [ 1 ]
     optional: true
+  }},
+  {{
+    name: "stream"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "exclude_input_in_output"
+    data_type: TYPE_BOOL
+    dims: [ 1 ]
+    optional: true
   }}
 ]
 
@@ -828,6 +847,10 @@ instance_group [
     kind: KIND_MODEL
   }}
 ]
+
+model_transaction_policy {{
+  decoupled: true
+}}
 '''
 
 config_path = repo_path / TRITON_MODEL_NAME / "config.pbtxt"
@@ -863,17 +886,17 @@ for p in sorted(repo_path.rglob("*")):
 # Option A: Docker command (recommended)
 docker_cmd = f"""
 # Pull the Triton container with vLLM backend
-docker pull nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3
+docker pull {TRITON_DOCKER_IMAGE}
 
 # Run Triton
-docker run --gpus all --rm -it \\
+docker run --gpus '"device={DOCKER_GPU_DEVICE}"' --rm -it \\
   --shm-size=4G \\
-  -p 8000:8000 \\
-  -p {TRITON_PORT}:8001 \\
-  -p 8002:8002 \\
+  -p {TRITON_HTTP_PORT}:8000 \\
+  -p {TRITON_GRPC_PORT}:8001 \\
+  -p {TRITON_METRICS_PORT}:8002 \\
   -v {MERGED_MODEL_PATH}:{MERGED_MODEL_PATH}:ro \\
   -v {repo_path}:/models \\
-  nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 \\
+  {TRITON_DOCKER_IMAGE} \\
   tritonserver --model-repository=/models
 """
 
@@ -892,60 +915,36 @@ print(local_cmd)
 # %% [markdown]
 # ### 4.6 Test Triton API
 #
-# Test the deployed model using Triton client.
+# Test the deployed model using Triton's `/generate` endpoint.
 
 # %%
 # Note: Run this after Triton server is running
 
-try:
-    import tritonclient.grpc as grpcclient
-    import tritonclient.http as httpclient
-
-    triton_available = True
-except ImportError:
-    print("⚠ tritonclient not installed. Run: pip install tritonclient[all]")
-    triton_available = False
-
-
 def test_triton_inference(prompt: str, image_b64: str = None):
-    """Test Triton inference."""
-    if not triton_available:
-        print("tritonclient not available")
-        return None
-
+    """Test Triton inference via HTTP /generate endpoint."""
     try:
-        # Use HTTP client
-        client = httpclient.InferenceServerClient(url=f"localhost:8000")
-
-        # Check server health
-        if not client.is_server_live():
+        health = requests.get(f"http://localhost:{TRITON_HTTP_PORT}/v2/health/live", timeout=5)
+        if health.status_code != 200:
             print("⚠ Triton server not live")
             return None
 
         print(f"✓ Triton server is live")
 
-        # Create input
-        text_input = httpclient.InferInput("text_input", [1], "BYTES")
-        text_input.set_data_from_numpy(np.array([prompt.encode()], dtype=np.object_))
-
-        inputs = [text_input]
-
+        payload = {
+            "text_input": prompt,
+            "parameters": {"temperature": 0.0, "max_tokens": 256, "stream": False},
+        }
         if image_b64:
-            image_input = httpclient.InferInput("image", [1], "BYTES")
-            image_input.set_data_from_numpy(np.array([image_b64.encode()], dtype=np.object_))
-            inputs.append(image_input)
+            payload["image"] = image_b64
 
-        # Create output
-        output = httpclient.InferRequestedOutput("text_output")
-
-        # Infer
-        response = client.infer(
-            model_name=TRITON_MODEL_NAME,
-            inputs=inputs,
-            outputs=[output],
+        response = requests.post(
+            f"http://localhost:{TRITON_HTTP_PORT}/v2/models/{TRITON_MODEL_NAME}/generate",
+            json=payload,
+            timeout=60,
         )
+        response.raise_for_status()
 
-        result = response.as_numpy("text_output")
+        result = response.json().get("text_output", "")
         print(f"Output: {result}")
         return result
 
@@ -963,26 +962,24 @@ def test_triton_inference(prompt: str, image_b64: str = None):
 # %%
 triton_curl_example = f"""
 # Check server health
-curl -v http://localhost:8000/v2/health/live
+curl -v http://localhost:{TRITON_HTTP_PORT}/v2/health/live
 
 # Check model status
-curl http://localhost:8000/v2/models/{TRITON_MODEL_NAME}
+curl http://localhost:{TRITON_HTTP_PORT}/v2/models/{TRITON_MODEL_NAME}
 
 # Get metrics (Prometheus format)
-curl http://localhost:8002/metrics
+curl http://localhost:{TRITON_METRICS_PORT}/metrics
 
-# Inference request
-curl -X POST http://localhost:8000/v2/models/{TRITON_MODEL_NAME}/infer \\
+# Inference request (/generate for decoupled vLLM backend)
+curl -X POST http://localhost:{TRITON_HTTP_PORT}/v2/models/{TRITON_MODEL_NAME}/generate \\
   -H "Content-Type: application/json" \\
   -d '{{
-    "inputs": [
-      {{
-        "name": "text_input",
-        "shape": [1],
-        "datatype": "BYTES",
-        "data": ["Detect the nutrition table."]
-      }}
-    ]
+    "text_input": "Detect the bounding box of the nutrition table.",
+    "parameters": {{
+      "temperature": 0.0,
+      "max_tokens": 100,
+      "stream": false
+    }}
   }}'
 """
 
@@ -1012,16 +1009,18 @@ print(f"  Health: http://localhost:{VLLM_PORT}/health")
 
 print(f"\n🔧 Triton Deployment:")
 print(f"  Model Repository: {TRITON_MODEL_REPO}")
-print(f"  HTTP API: http://localhost:8000/v2/models/{TRITON_MODEL_NAME}")
-print(f"  gRPC: localhost:{TRITON_PORT}")
-print(f"  Metrics: http://localhost:8002/metrics")
+print(f"  HTTP API: http://localhost:{TRITON_HTTP_PORT}/v2/models/{TRITON_MODEL_NAME}/generate")
+print(f"  gRPC: localhost:{TRITON_GRPC_PORT}")
+print(f"  Metrics: http://localhost:{TRITON_METRICS_PORT}/metrics")
 
 print("\n📋 Quick Commands:")
 print(f"  Launch vLLM:")
-print(f"    {' '.join(vllm_cmd)}")
+print(f"    {docker_vllm_cmd}")
 print(f"\n  Launch Triton (Docker):")
-print(f"    docker run --gpus all --rm -p 8000:8000 -v {repo_path}:/models \\")
-print(f"      nvcr.io/nvidia/tritonserver:24.08-vllm-python-py3 tritonserver --model-repository=/models")
+print(f"    docker run --gpus 'device={DOCKER_GPU_DEVICE}' --rm -it --shm-size=4G \\")
+print(f"      -p {TRITON_HTTP_PORT}:8000 -p {TRITON_GRPC_PORT}:8001 -p {TRITON_METRICS_PORT}:8002 \\")
+print(f"      -v {MERGED_MODEL_PATH}:{MERGED_MODEL_PATH}:ro -v {repo_path}:/models \\")
+print(f"      {TRITON_DOCKER_IMAGE} tritonserver --model-repository=/models")
 
 # %% [markdown]
 # ### 5.2 Cleanup
@@ -1053,9 +1052,6 @@ def cleanup():
 
 # Uncomment to cleanup:
 # cleanup()
-
-# %%
-cleanup()
 
 # %% [markdown]
 # ### 5.3 Next Steps
