@@ -112,34 +112,40 @@ Results are consistent with Session 32 (~310ms P50 at steady state after warmup)
 
 ---
 
-## Part 2: Stale Reference Cleanup (TODO)
+## Part 2: Stale Reference Cleanup (Complete)
 
-While exploring for the Dockerfile, we found tracked files with outdated references:
+Fixed all tracked files with outdated references. `notebooks/07_deployment_vllm_triton.py` was already up to date (user had updated it).
 
 ### Image version: `24.08` → `26.01`
 
-| File | What to fix |
-|------|-------------|
-| `scripts/deploy_triton.sh` | `TRITON_IMAGE` variable |
-| `triton_model_repository/README.md` | Docker run example |
-| `triton_model_repository/PATH_MAPPING.md` | Docker run example |
-| `scripts/setup_triton.py` | Docstring example |
-| `notebooks/07_deployment_vllm_triton.py` | Multiple references |
+| File | Status |
+|------|--------|
+| `scripts/deploy_triton.sh` | Fixed |
+| `triton_model_repository/README.md` | Fixed |
+| `triton_model_repository/PATH_MAPPING.md` | Fixed |
+| `scripts/setup_triton.py` | Fixed (2 places) |
+| `notebooks/10_Triton.py` + `10_Triton.ipynb` | Fixed |
 
 ### Endpoint: `/infer` → `/generate`
 
-| File | What to fix |
-|------|-------------|
-| `scripts/validate_triton_accuracy.py` | Endpoint URL |
-| `scripts/test_deployment_inference.py` | Endpoint URL |
-| `scripts/setup_triton.py` | Docstring output |
-| `triton_model_repository/README.md` | Table + examples + incorrect "Important Note" |
-| `notebooks/07_deployment_vllm_triton.py` | Curl example |
+| File | Status |
+|------|--------|
+| `scripts/validate_triton_accuracy.py` | Fixed |
+| `scripts/setup_triton.py` | Fixed |
+| `triton_model_repository/README.md` | Fixed (table, examples, Important Note) |
 
-**Not fixing** (untracked or historical):
-- `scripts/Commented_*.py` — untracked
+**Not fixed** (intentional):
+- `scripts/Commented_*.py` — untracked, not visible on GitHub
 - `temp_*.txt` — untracked
-- `refactor_documentation/` session docs — historical records
+- `refactor_documentation/` session docs — historical records, kept as-is
+
+---
+
+## Part 3: README and Documentation Updates (Complete)
+
+- Added Triton deployment section to main `README.md` (prerequisites, quick start, model options, inference examples, ports, benchmarks)
+- Updated project structure tree in `README.md` (added Dockerfile, docker/, triton_model_repository/, deployment scripts)
+- Updated `scripts/README.md` to include all scripts organized by category (Training, Model Preparation, Serving, Benchmarking, Evaluation, Quick Tests)
 
 ---
 
@@ -206,4 +212,19 @@ curl -X POST http://localhost:8000/v2/models/qwen2vl_nutrition_gptq_int4/generat
 
 ## Files Modified This Session
 
-(None yet — stale reference fixes are pending)
+| File | What changed |
+|------|-------------|
+| `README.md` | Added Triton deployment section, updated project structure tree |
+| `scripts/README.md` | Added all non-training scripts organized by category |
+| `scripts/deploy_triton.sh` | `24.08` → `26.01` |
+| `scripts/setup_triton.py` | `24.08` → `26.01`, `/infer` → `/generate` |
+| `scripts/validate_triton_accuracy.py` | `/infer` → `/generate` |
+| `triton_model_repository/README.md` | `24.08` → `26.01`, `/infer` → `/generate`, fixed Important Note |
+| `triton_model_repository/PATH_MAPPING.md` | `24.08` → `26.01` |
+| `notebooks/10_Triton.py` + `.ipynb` | `24.08` → `26.01` |
+
+## TODO (for next session)
+
+- Add Model Preparation section to README (merge LoRA + GPTQ quantization)
+- Add standalone vLLM Serving section to README
+- Add inference performance results to README
