@@ -365,6 +365,79 @@ Running `scripts/train_recipe.py` creates outputs in `/ssd1/zhuoyuan/vlm_outputs
 
 **Storage Strategy**: All large files on SSD to preserve home directory quota (~100GB).
 
+## 🔨 Model Preparation
+
+After training, prepare the model for deployment by merging LoRA adapters and optionally quantizing.
+
+### Step 1: Merge LoRA Adapters
+
+Training produces LoRA adapter weights. Merge them into the base model to create a standalone model:
+
+```bash
+# Merge r4-joint LoRA adapter into base Qwen2-VL-7B
+python scripts/merge_lora.py \
+    --adapter-path /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint \
+    --output-path /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged
+```
+
+This creates a full BF16 model (~15.5 GB) that can be served directly without PEFT dependencies.
+
+### Step 2: GPTQ INT4 Quantization (Optional)
+
+Quantize the merged model for faster inference and lower VRAM usage:
+
+```bash
+conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+
+python scripts/quantize_model_gptq.py \
+    --model-path /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged \
+    --output-path /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4 \
+    --num-calibration-samples 128
+```
+
+- Quantizes only the LLM portion (vision encoder stays BF16 for accuracy)
+- Uses multimodal calibration data (images + text from training set)
+- Outputs `gptq_marlin` compatible format for vLLM
+- Result: ~6.5 GB model, ~1.7x faster inference than BF16
+
+## 🖥️ Serving (Standalone vLLM)
+
+For quick local serving without Docker or Triton, use vLLM directly:
+
+```bash
+conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+
+# Serve BF16 model
+python scripts/serve_vllm.py --gpu 0
+
+# Serve GPTQ INT4 model
+python scripts/serve_vllm.py --gpu 0 \
+    --model /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4 \
+    --quantization gptq_marlin --dtype float16
+
+# With custom settings
+python scripts/serve_vllm.py --gpu 0 \
+    --port 8000 \
+    --gpu-memory-utilization 0.9 \
+    --no-enable-prefix-caching
+```
+
+Once the server is running, send requests via the OpenAI-compatible API:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "qwen2vl-nutrition",
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,<IMAGE_B64>"}},
+            {"type": "text", "text": "Detect the nutrition facts table in this image and return its bounding box coordinates."}
+        ]}],
+        "temperature": 0,
+        "max_tokens": 100
+    }'
+```
+
 ## 🚢 Deployment (Triton Inference Server)
 
 The fine-tuned model can be deployed as a production inference server using NVIDIA Triton with vLLM backend. A Dockerfile is provided for reproducible deployment.
