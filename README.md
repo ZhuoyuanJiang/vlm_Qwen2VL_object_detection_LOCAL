@@ -66,6 +66,13 @@ jupyter notebook fine_tuning_vlm_for_object_detection_trl.ipynb
 | **Exact snapshot** | `environment.lock.yml` (with builds, reproducible) |
 | **Pip packages** | `requirements.txt` |
 
+### Environment Roles
+
+| Environment | Primary Use | Notes |
+|-------------|-------------|-------|
+| `vlm_Qwen2VL_object_detection` | Training, notebook development, refactor scripts | Main dev/training environment (`environment.yml`) |
+| `/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving` | GPTQ quantization, standalone vLLM serving, serving benchmarks | Includes `vllm` stack and `gptqmodel` used by `scripts/quantize_model_gptq.py` |
+
 ### Key Dependencies
 - `transformers` (git HEAD) - HuggingFace transformers
 - `trl` (git HEAD, ~0.22.0.dev0) - TRL training library with `completion_only_loss`
@@ -167,12 +174,18 @@ vlm_Qwen2VL_object_detection/
 │   ├── test_data_format_before_chat_template.py
 │   └── test_golden_output.py
 ├── notebooks/                    # Educational notebooks (topic-specific deep dives)
-│   ├── 01_dataset_exploration.ipynb      # EDA and data understanding
-│   ├── 02_model_understanding.ipynb      # Qwen2-VL architecture exploration
-│   ├── 03_data_preprocessing.ipynb       # Data format and preprocessing
-│   ├── 04_evaluation_analysis.ipynb      # Model evaluation and metrics
-│   ├── 05_debug_dtype_issue.ipynb        # Debugging dtype/device issues
-│   └── 06_quantization_and_trainable_params.ipynb  # Quantization deep dive
+│   ├── 01_dataset_exploration.ipynb
+│   ├── 02_model_understanding.ipynb
+│   ├── 03_data_preprocessing.ipynb
+│   ├── 04_evaluation_analysis.ipynb
+│   ├── 05_debug_dtype_issue.ipynb
+│   ├── 06_quantization_and_trainable_params.ipynb
+│   ├── 07_deployment_vllm_triton.ipynb
+│   ├── 08_vllm_performance_analysis.ipynb
+│   ├── 09_vllm_memory_experiments.ipynb
+│   ├── 10_Triton.ipynb
+│   ├── debug_repetition_bug.ipynb
+│   └── generate_golden_test_data.ipynb
 └── refactor_documentation/       # Development history (33 sessions)
 ```
 
@@ -295,7 +308,7 @@ python scripts/train_recipe.py --recipe r4-joint --gpu 4,5
 
 ### Training Accuracy
 
-Based on evaluation of 50 test samples (HuggingFace inference):
+Based on evaluation of a 50-sample validation slice (HuggingFace inference):
 
 | Metric | r4-joint (Best) |
 |--------|-----------------|
@@ -424,7 +437,13 @@ This creates a full BF16 model (~15.5 GB) that can be served directly without PE
 Quantize the merged model for faster inference and lower VRAM usage:
 
 ```bash
+# Quantization environment (contains vLLM + GPTQModel)
 conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
+
+# Verify GPTQModel is installed
+python -c "import gptqmodel; print('gptqmodel is available')"
+# If missing:
+# pip install "gptqmodel>=2.2.0"
 
 python scripts/quantize_model_gptq.py \
     --model-path /ssd1/zhuoyuan/vlm_outputs/qwen2vl-nutrition-detection-r4-joint-merged \
@@ -521,10 +540,40 @@ curl http://localhost:8000/v2/health/live
 # Encode an image to base64
 IMAGE_B64=$(base64 -w0 test_image.jpg)
 
-# Send request to the /generate endpoint
+# Send request to /generate using the typed "inputs" payload used in
+# scripts/validate_triton_accuracy.py and triton_model_repository/README.md
 curl -X POST http://localhost:8000/v2/models/qwen2vl_nutrition_gptq_int4/generate \
-    -H "Content-Type: application/json" \
-    -d "{\"text_input\": \"Detect the nutrition facts table.\", \"image\": \"${IMAGE_B64}\", \"parameters\": {\"temperature\": 0, \"max_tokens\": 100}}"
+  -H "Content-Type: application/json" \
+  -d @- <<JSON
+{
+  "inputs": [
+    {
+      "name": "text_input",
+      "shape": [1],
+      "datatype": "BYTES",
+      "data": ["Detect the nutrition facts table."]
+    },
+    {
+      "name": "image",
+      "shape": [1],
+      "datatype": "BYTES",
+      "data": ["${IMAGE_B64}"]
+    },
+    {
+      "name": "sampling_parameters",
+      "shape": [1],
+      "datatype": "BYTES",
+      "data": ["{\"temperature\": 0, \"max_tokens\": 100}"]
+    },
+    {
+      "name": "stream",
+      "shape": [1],
+      "datatype": "BOOL",
+      "data": [false]
+    }
+  ]
+}
+JSON
 ```
 
 ### Ports
