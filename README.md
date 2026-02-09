@@ -1,6 +1,6 @@
 # Qwen2-VL Fine-tuning for Nutrition Table Detection
 
-Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging images.
+**Summary**: Nutrition facts tables appear in diverse layouts, orientations, and lighting conditions across food packaging. Extracting this information automatically requires first locating the table in the image. This project explores using a vision-language model ([Qwen2-VL-7B](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)) for this task — fine-tuning it to output bounding box coordinates given a food packaging image, as an alternative to traditional object detection approaches (e.g., YOLO, Faster R-CNN). This project showcases the full pipeline from training (with four recipe strategies), GPTQ INT4 quantization, to production deployment via NVIDIA Triton Inference Server with vLLM backend.
 
 > **Start Here**: Read [`fine_tuning_vlm_for_object_detection_trl.ipynb`](fine_tuning_vlm_for_object_detection_trl.ipynb) first. This notebook demonstrates the **entire pipeline** from data loading to training to evaluation to deployment. It contains the core logic that all other scripts are built upon. This is the recommended entry point for interviewers, hiring managers, and anyone who wants to learn about this project.
 
