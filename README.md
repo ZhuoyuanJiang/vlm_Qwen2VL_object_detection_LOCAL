@@ -4,6 +4,25 @@ Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging i
 
 > **Start Here**: Read [`fine_tuning_vlm_for_object_detection_trl.ipynb`](fine_tuning_vlm_for_object_detection_trl.ipynb) first. This notebook demonstrates the **entire pipeline** from data loading to training to evaluation to deployment. It contains the core logic that all other scripts are built upon. This is the recommended entry point for interviewers, hiring managers, and anyone who wants to learn about this project.
 
+## Table of Contents
+
+| Section | Description |
+|---------|-------------|
+| [Demo Results](#demo-results) | Visual examples of model predictions |
+| [Quick Start](#-quick-start) | Get up and running in minutes |
+| [Environment & Requirements](#-environment--requirements) | Dependencies, conda environments, setup |
+| [Dataset](#-dataset) | Data source and format |
+| [Training Recipes](#-training-recipes) | Four training strategies and commands |
+| [Training Output Structure](#-training-output-structure) | Where training outputs are stored |
+| [Performance Results](#-performance-results) | Accuracy, latency, and throughput benchmarks |
+| [Model Preparation](#-model-preparation) | Merge LoRA adapters and GPTQ quantization |
+| [Serving (Standalone vLLM)](#️-serving-standalone-vllm) | Local inference server without Docker |
+| [Deployment (Triton)](#-deployment-triton-inference-server) | Production deployment with Docker |
+| [Project Structure](#️-project-structure---overview) | Directory layout and source code organization |
+| [Scripts Folder](#-scripts-folder) | All scripts with purpose and when to use |
+| [Training Configuration](#-training-configuration) | Model, hardware, and hyperparameter settings |
+| [Troubleshooting](#-troubleshooting) | Common issues and fixes |
+
 ## Demo Results
 
 **Fine-tuned model achieves 86% mean IoU with 100% detection rate** on nutrition table detection task.
@@ -31,14 +50,22 @@ The model occasionally struggles with challenging images:
 *Interestingly, the model's prediction may actually be more accurate than the ground truth annotation - highlighting that low IoU doesn't always mean wrong prediction and our model's performance is very strong!*
 ## 🚀 Quick Start
 
-### 1. Environment Setup
+### 1. Clone and Create Environment
 ```bash
+git clone <repo-url>
+cd vlm_Qwen2VL_object_detection
+
+# Create conda environment
+conda env create -f environment.yml
+
 conda activate vlm_Qwen2VL_object_detection
-cd ~/projects/vlm_Qwen2VL_object_detection
 ```
 
 ### 2. HuggingFace Token
-Token configured in `~/.bashrc` - works automatically for all projects.
+```bash
+# Set your HuggingFace token (needed for dataset and model downloads)
+huggingface-cli login
+```
 
 ### 3. Run Training
 
@@ -101,9 +128,10 @@ conda activate qwen2vl_nutrition_vllm_serving
 conda activate /ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving
 ```
 
-## ⚠️ TRL Version Note
+<details>
+<summary><strong>⚠️ TRL Version Note</strong></summary>
 
-**This project uses TRL ~0.22.0.dev0** (git-based) with the new `completion_only_loss` parameter:
+This project uses **TRL ~0.22.0.dev0** (git-based) with the new `completion_only_loss` parameter:
 
 ```python
 from trl import SFTConfig, SFTTrainer
@@ -122,6 +150,8 @@ trainer = SFTTrainer(
 
 > **Note**: The old `DataCollatorForCompletionOnlyLM` from TRL 0.10.1 is no longer needed. The TRL team integrated completion-only functionality directly into the trainer.
 
+</details>
+
 ## 📁 Project Files
 
 - `fine_tuning_vlm_for_object_detection_trl.ipynb` - **Comprehensive educational notebook** covering the full pipeline: data loading, preprocessing, model setup, training, evaluation, and deployment
@@ -132,31 +162,8 @@ trainer = SFTTrainer(
 - `environment.yml` - Conda environment (portable)
 - `environment.lock.yml` - Conda environment (exact)
 
-## 🔁 Notebook ⇄ Script Sync (Jupytext)
-
-> **Note**: Replace paths below with your project location.
-
-- One-time pairing (sets formats on the notebook):
-  ```bash
-  jupytext --set-formats ipynb,py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
-  ```
-
-- Ongoing sync (both directions; updates the older file from the newer one):
-  ```bash
-  jupytext --sync /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb | cat
-  ```
-
-- Directional sync (optional control):
-  - ipynb → py
-    ```bash
-    jupytext --to py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
-    ```
-  - py → ipynb
-    ```bash
-    jupytext --to ipynb /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.py
-    ```
-
-## 📓 Notebook Guide
+<details>
+<summary><strong>📓 Notebook Guide</strong></summary>
 
 | Notebook | Focus | Prerequisites | Run All |
 |----------|-------|---------------|---------|
@@ -172,6 +179,8 @@ trainer = SFTTrainer(
 | `notebooks/10_Triton.ipynb` | Triton deployment and serving walkthrough | Triton server (usually Docker) | Partial |
 | `notebooks/debug_repetition_bug.ipynb` | Debug diary for output repetition bug | Dev/training env | Yes |
 | `notebooks/generate_golden_test_data.ipynb` | Generate golden test data for test fixtures | Dev/training env | Yes |
+
+</details>
 
 ## 🏗️ Project Structure - Overview
 
@@ -305,6 +314,42 @@ vlm_Qwen2VL_object_detection/
 | Benchmark Triton | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
 | Validate Triton vs baseline | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
 
+## 📊 Dataset
+
+Using nutrition table detection dataset from HuggingFace:
+- **Source**: OpenFoodFacts nutrition-table-detection
+- **Training samples**: ~1083
+- **Task**: Detect bounding boxes of nutrition tables
+- **Format**: Conversation-style with user prompts and assistant responses
+
+## 🔧 Training Configuration
+
+### Model
+- **Base**: Qwen2-VL-7B-Instruct
+- **Quantization**: 4-bit NF4 with BitsAndBytes
+- **Fine-tuning**: LoRA (r=64, alpha=128)
+- **Training**: Completion-only loss on assistant responses
+
+### Hardware
+- **Tested on**: 2x NVIDIA RTX 6000 Ada (48GB VRAM each, 96GB total)
+- **Multi-GPU**: Supported via device_map="balanced" (model parallelism)
+
+### Key Hyperparameters
+- **Batch Size**: 2 per device
+- **Gradient Accumulation**: 8 steps
+- **Learning Rate**: 1e-5 to 2e-5 with cosine schedule
+- **Epochs**: 3
+- **LoRA Rank**: 64 (higher for vision tasks)
+- **LoRA Alpha**: 128
+- **Max Length**: 2048 tokens
+
+### Experiment Tracking
+
+This project uses [Weights & Biases](https://wandb.ai/) for experiment tracking.
+```bash
+wandb login
+```
+
 ## 🧪 Training Recipes
 
 **Entry point**: `scripts/train_recipe.py`
@@ -403,42 +448,6 @@ GPTQ INT4 quantization has minimal accuracy loss (<1% IoU drift) compared to BF1
 - RTX 4090 is ~1.7x faster than RTX 3090 for the same model
 - Higher concurrency increases throughput but also per-request latency
 - Triton accuracy (mean IoU) not yet verified — pending (since Triton wraps vLLM, results should be identical)
-
-## 🔧 Configuration
-
-### Model
-- **Base**: Qwen2-VL-7B-Instruct
-- **Quantization**: 4-bit NF4 with BitsAndBytes
-- **Fine-tuning**: LoRA (r=64, alpha=128)
-- **Training**: Completion-only loss on assistant responses
-
-### Hardware
-- **Tested on**: 2x NVIDIA RTX 6000 Ada (48GB VRAM each, 96GB total)
-- **Multi-GPU**: Supported via device_map="balanced" (model parallelism)
-
-### Key Hyperparameters
-- **Batch Size**: 2 per device
-- **Gradient Accumulation**: 8 steps
-- **Learning Rate**: 1e-5 to 2e-5 with cosine schedule
-- **Epochs**: 3
-- **LoRA Rank**: 64 (higher for vision tasks)
-- **LoRA Alpha**: 128
-- **Max Length**: 2048 tokens
-
-### Experiment Tracking
-
-This project uses [Weights & Biases](https://wandb.ai/) for experiment tracking.
-```bash
-wandb login
-```
-
-## 📊 Dataset
-
-Using nutrition table detection dataset from HuggingFace:
-- **Source**: OpenFoodFacts nutrition-table-detection
-- **Training samples**: ~1083
-- **Task**: Detect bounding boxes of nutrition tables
-- **Format**: Conversation-style with user prompts and assistant responses
 
 ## 📁 Training Output Structure
 
@@ -643,6 +652,27 @@ The `Dockerfile` extends `nvcr.io/nvidia/tritonserver:26.01-vllm-python-py3` and
 
 For detailed deployment documentation, see [`refactor_documentation/PROGRESS_20260206_SESSION32.md`](refactor_documentation/PROGRESS_20260206_SESSION32.md).
 
+### Triton Model Repository
+
+```
+triton_model_repository/
+├── README.md                              # Deployment guide and path mapping
+├── PATH_MAPPING.md                        # Host → Cloud → Container path reference
+│
+├── qwen2vl_nutrition_gptq_int4/           # GPTQ INT4 model (~6.5 GB, ~310ms P50)
+│   ├── config.pbtxt                       # Triton API contract (inputs, outputs, decoupled mode)
+│   └── 1/
+│       └── model.json                     # vLLM engine config (model path, dtype, tokenizer)
+│
+└── qwen2vl_nutrition_bf16/                # BF16 full-precision model (~15.5 GB, ~538ms P50)
+    ├── config.pbtxt
+    └── 1/
+        └── model.json
+```
+
+- `config.pbtxt` defines Triton's API: input/output tensors, `decoupled: true` for vLLM streaming protocol, `KIND_MODEL` instance group
+- `model.json` passes all keys directly to vLLM's `AsyncEngineArgs`: model path, dtype, quantization, tokenizer settings
+
 ### Running Benchmarks
 
 Benchmarks run on the **host machine** (not inside Docker). Install client-side dependencies first:
@@ -664,6 +694,30 @@ python scripts/benchmark_triton.py \
     --model qwen2vl_nutrition_bf16 \
     --concurrency 1 --num-requests 20 --vary-images
 ```
+
+## 🔁 Notebook ⇄ Script Sync (Jupytext)
+
+> **Note**: Replace paths below with your project location.
+
+- One-time pairing (sets formats on the notebook):
+  ```bash
+  jupytext --set-formats ipynb,py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
+  ```
+
+- Ongoing sync (both directions; updates the older file from the newer one):
+  ```bash
+  jupytext --sync /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb | cat
+  ```
+
+- Directional sync (optional control):
+  - ipynb → py
+    ```bash
+    jupytext --to py:percent /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.ipynb
+    ```
+  - py → ipynb
+    ```bash
+    jupytext --to ipynb /home/zhuoyuan/projects/vlm_Qwen2VL_object_detection/fine_tuning_vlm_for_object_detection_trl.py
+    ```
 
 ## 🔍 Troubleshooting
 
