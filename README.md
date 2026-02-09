@@ -16,11 +16,11 @@ Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging i
 | [Training Recipes](#-training-recipes) | Four training strategies and commands |
 | [Training Output Structure](#-training-output-structure) | Where training outputs are stored |
 | [Model Preparation for Deployment](#-model-preparation-for-deployment) | Merge LoRA adapters and GPTQ quantization |
-| [Serving (Standalone vLLM)](#️-serving-standalone-vllm) | Local inference server without Docker |
+| [Serving (Standalone vLLM)](#-serving-standalone-vllm) | Local inference server without Docker |
 | [Deployment (Triton)](#-deployment-triton-inference-server) | Production deployment with Docker |
 | [Performance Results](#-performance-results) | Accuracy, latency, and throughput benchmarks |
-| [Project Structure](#️-project-structure---overview) | Directory layout and source code organization |
-| [Scripts Folder](#-scripts-folder) | All scripts with purpose and when to use |
+| [Project Structure (Overview)](#-project-structure-overview) | Directory layout |
+| [Project Structure (Detailed)](#-project-structure-detailed) | src/, scripts, and notebooks reference |
 | [Troubleshooting](#-troubleshooting) | Common issues and fixes |
 
 ## Demo Results
@@ -371,7 +371,8 @@ The fine-tuned model can be deployed as a production inference server using NVID
 # 1. Build the Docker image
 docker build -t qwen2vl-triton .
 
-# 2. Download model weights from HuggingFace
+# 2. Download model weights from HuggingFace (requires Git LFS)
+git lfs install
 #    GPTQ INT4 (~6.5 GB):
 git clone https://huggingface.co/<org>/qwen2vl-nutrition-detection-r4-joint-merged-gptq-int4 /path/to/gptq-weights
 #    BF16 full-precision (~15.5 GB):
@@ -399,7 +400,8 @@ curl http://localhost:8000/v2/health/live
 
 ```bash
 # Encode an image to base64
-IMAGE_B64=$(base64 -w0 test_image.jpg)
+IMAGE_B64=$(base64 -w0 test_image.jpg)          # Linux (GNU coreutils)
+# IMAGE_B64=$(base64 < test_image.jpg | tr -d '\n')  # macOS
 
 # Send request to /generate using the typed "inputs" payload used in
 # scripts/validate_triton_accuracy.py and triton_model_repository/README.md
@@ -541,9 +543,9 @@ GPTQ INT4 quantization has minimal accuracy loss (<1% IoU drift) compared to BF1
 - GPTQ INT4 is ~1.5x faster than BF16 at P50 latency (470ms vs 703ms)
 - RTX 4090 is ~1.7x faster than RTX 3090 for the same model
 - Higher concurrency increases throughput but also per-request latency
-- Triton accuracy (mean IoU) not yet verified — pending (since Triton wraps vLLM, results should be identical)
+- Triton accuracy (mean IoU) not yet verified — pending (expected to be close to standalone vLLM; we plan to validate with `scripts/validate_triton_accuracy.py`)
 
-## 🏗️ Project Structure - Overview
+## 🏗️ Project Structure (Overview)
 
 ```
 vlm_Qwen2VL_object_detection/
@@ -588,7 +590,9 @@ vlm_Qwen2VL_object_detection/
 └── refactor_documentation/       # Development history (33 sessions)
 ```
 
-## 📂 Project Structure - Detailed (src/)
+## 📂 Project Structure (Detailed)
+
+## src/ Folder (Detailed)
 
 ### `src/data/`
 | File | Description |
@@ -675,8 +679,7 @@ vlm_Qwen2VL_object_detection/
 | Benchmark Triton | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
 | Validate Triton vs baseline | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
 
-<details>
-<summary><strong>📓 Notebook Guide</strong></summary>
+## 📓 Notebook Folder
 
 | Notebook | Focus | Prerequisites | Run All |
 |----------|-------|---------------|---------|
@@ -692,8 +695,6 @@ vlm_Qwen2VL_object_detection/
 | `notebooks/10_Triton.ipynb` | Triton deployment and serving walkthrough | Triton server (usually Docker) | Partial |
 | `notebooks/debug_repetition_bug.ipynb` | Debug diary for output repetition bug | Dev/training env | Yes |
 | `notebooks/generate_golden_test_data.ipynb` | Generate golden test data for test fixtures | Dev/training env | Yes |
-
-</details>
 
 ## 🔁 Notebook ⇄ Script Sync (Jupytext)
 
@@ -727,6 +728,7 @@ vlm_Qwen2VL_object_detection/
 | **Dataset Access** | HF token should be set in ~/.bashrc |
 | **dtype mismatch error** | Check device_map and DataParallel conflicts (see Session 20 docs) |
 | **Evaluation showing 0% detection** | Add `gc.collect()` and `torch.cuda.empty_cache()` before loading models |
+| **No test set available** | Dataset has train/val splits only — use the validation slice for evaluation |
 
 ## 📄 License
 
