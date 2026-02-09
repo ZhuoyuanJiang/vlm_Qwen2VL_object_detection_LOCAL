@@ -12,15 +12,15 @@ Fine-tuning Qwen2-VL-7B model for detecting nutrition tables in food packaging i
 | [Quick Start](#-quick-start) | Get up and running in minutes |
 | [Environment & Requirements](#-environment--requirements) | Dependencies, conda environments, setup |
 | [Dataset](#-dataset) | Data source and format |
+| [Training Configuration](#-training-configuration) | Model, hardware, and hyperparameter settings |
 | [Training Recipes](#-training-recipes) | Four training strategies and commands |
 | [Training Output Structure](#-training-output-structure) | Where training outputs are stored |
-| [Performance Results](#-performance-results) | Accuracy, latency, and throughput benchmarks |
-| [Model Preparation](#-model-preparation) | Merge LoRA adapters and GPTQ quantization |
+| [Model Preparation for Deployment](#-model-preparation-for-deployment) | Merge LoRA adapters and GPTQ quantization |
 | [Serving (Standalone vLLM)](#️-serving-standalone-vllm) | Local inference server without Docker |
 | [Deployment (Triton)](#-deployment-triton-inference-server) | Production deployment with Docker |
+| [Performance Results](#-performance-results) | Accuracy, latency, and throughput benchmarks |
 | [Project Structure](#️-project-structure---overview) | Directory layout and source code organization |
 | [Scripts Folder](#-scripts-folder) | All scripts with purpose and when to use |
-| [Training Configuration](#-training-configuration) | Model, hardware, and hyperparameter settings |
 | [Troubleshooting](#-troubleshooting) | Common issues and fixes |
 
 ## Demo Results
@@ -48,6 +48,7 @@ The model occasionally struggles with challenging images:
 ![Failure Case - Shifted](assets/demo_failure_case.png)
 
 *Interestingly, the model's prediction may actually be more accurate than the ground truth annotation - highlighting that low IoU doesn't always mean wrong prediction and our model's performance is very strong!*
+
 ## 🚀 Quick Start
 
 ### 1. Clone and Create Environment
@@ -86,6 +87,15 @@ jupyter notebook fine_tuning_vlm_for_object_detection_trl.ipynb
 
 ## 📦 Environment & Requirements
 
+This project uses two conda environments:
+
+| Environment | Primary Use | Notes |
+|-------------|-------------|-------|
+| `vlm_Qwen2VL_object_detection` | Training, notebook development, refactor scripts | Main dev/training environment (`environment.yml`) |
+| `qwen2vl_nutrition_vllm_serving` | GPTQ quantization, standalone vLLM serving, serving benchmarks | Defined by `environment_vllm_serving.yml`; local path reference: `/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving` |
+
+### Training Environment
+
 | Component | Version/File |
 |-----------|--------------|
 | **Python** | 3.10.18 |
@@ -93,21 +103,14 @@ jupyter notebook fine_tuning_vlm_for_object_detection_trl.ipynb
 | **Exact snapshot** | `environment.lock.yml` (with builds, reproducible) |
 | **Pip packages** | `requirements.txt` |
 
-### Environment Roles
-
-| Environment | Primary Use | Notes |
-|-------------|-------------|-------|
-| `vlm_Qwen2VL_object_detection` | Training, notebook development, refactor scripts | Main dev/training environment (`environment.yml`) |
-| `qwen2vl_nutrition_vllm_serving` | GPTQ quantization, standalone vLLM serving, serving benchmarks | Defined by `environment_vllm_serving.yml`; local path reference: `/ssd1/zhuoyuan/envs/qwen2vl_nutrition_vllm_serving` |
-
-### Key Dependencies
+#### Key Dependencies
 - `transformers` (git HEAD) - HuggingFace transformers
 - `trl` (git HEAD, ~0.22.0.dev0) - TRL training library with `completion_only_loss`
 - `peft==0.17.1` - LoRA/QLoRA
 - `bitsandbytes==0.47.0` - 4-bit quantization
 - `torch==2.4.1+cu121` - PyTorch with CUDA 12.1
 
-### Recreate Environment
+### Recreate Training Environment
 ```bash
 # From portable export (recommended)
 conda env create -f environment.yml
@@ -152,167 +155,12 @@ trainer = SFTTrainer(
 
 </details>
 
-## 📁 Project Files
+## 📁 Project Files - Training
 
 - `fine_tuning_vlm_for_object_detection_trl.ipynb` - **Comprehensive educational notebook** covering the full pipeline: data loading, preprocessing, model setup, training, evaluation, and deployment
-- `fine_tuning_vlm_for_object_detection_trl.py` - Python script (synced with notebook via Jupytext)
 - `scripts/train_recipe.py` - **Production training script** for running different recipes
 - `notebooks/` - **Topic-specific educational notebooks** (EDA, model understanding, evaluation, etc.)
-- `requirements.txt` - Pip dependencies
-- `environment.yml` - Conda environment (portable)
-- `environment.lock.yml` - Conda environment (exact)
-
-<details>
-<summary><strong>📓 Notebook Guide</strong></summary>
-
-| Notebook | Focus | Prerequisites | Run All |
-|----------|-------|---------------|---------|
-| `notebooks/01_dataset_exploration.ipynb` | Dataset EDA and sample inspection | Dev/training env | Yes |
-| `notebooks/02_model_understanding.ipynb` | Qwen2-VL architecture walkthrough | Dev/training env | Yes |
-| `notebooks/03_data_preprocessing.ipynb` | Data formatting and chat-template pipeline | Dev/training env | Yes |
-| `notebooks/04_evaluation_analysis.ipynb` | Evaluation metrics and IoU interpretation | Dev/training env + result files | Yes |
-| `notebooks/05_debug_dtype_issue.ipynb` | Dtype/device debugging notes | Dev/training env | Yes |
-| `notebooks/06_quantization_and_trainable_params.ipynb` | Quantization concepts and trainable parameter checks | Dev/training env | Yes |
-| `notebooks/07_deployment_vllm_triton.ipynb` | Step-by-step vLLM/Triton deployment walkthrough | vLLM server for runnable vLLM cells; Triton/Docker optional for Triton cells | Partial |
-| `notebooks/08_vllm_performance_analysis.ipynb` | vLLM benchmark analysis and metric interpretation | Benchmark result files + (optional) running vLLM server | Partial |
-| `notebooks/09_vllm_memory_experiments.ipynb` | vLLM memory/concurrency experiments | Running vLLM server; GPU access | Partial |
-| `notebooks/10_Triton.ipynb` | Triton deployment and serving walkthrough | Triton server (usually Docker) | Partial |
-| `notebooks/debug_repetition_bug.ipynb` | Debug diary for output repetition bug | Dev/training env | Yes |
-| `notebooks/generate_golden_test_data.ipynb` | Generate golden test data for test fixtures | Dev/training env | Yes |
-
-</details>
-
-## 🏗️ Project Structure - Overview
-
-```
-vlm_Qwen2VL_object_detection/
-├── Dockerfile                    # Triton deployment image (see Deployment section)
-├── docker/
-│   └── entrypoint.sh             # Model selection + Triton startup script
-├── src/                          # Modular source code
-│   ├── data/                     # Dataset preparation & collation
-│   ├── models/                   # Model loading & configuration
-│   ├── training/                 # Training utilities & evaluation
-│   └── utils/                    # GPU management & visualization
-├── scripts/                      # Training & deployment scripts
-│   ├── train.py                  # Simple single-config training
-│   ├── train_recipe.py           # Flexible recipe-based training (recommended)
-│   ├── run_recipes.sh            # Bash wrapper for train_recipe.py
-│   ├── benchmark_triton.py       # Triton HTTP benchmark (async)
-│   ├── benchmark_vllm.py         # Standalone vLLM benchmark
-│   └── serve_vllm.py             # Standalone vLLM serving wrapper
-├── triton_model_repository/      # Triton Inference Server configs
-│   ├── qwen2vl_nutrition_gptq_int4/  # GPTQ INT4 model config
-│   │   ├── config.pbtxt
-│   │   └── 1/model.json
-│   └── qwen2vl_nutrition_bf16/       # BF16 model config
-│       ├── config.pbtxt
-│       └── 1/model.json
-├── tests/                        # Test suite
-│   ├── test_data_format_before_chat_template.py
-│   └── test_golden_output.py
-├── notebooks/                    # Educational notebooks (topic-specific deep dives)
-│   ├── 01_dataset_exploration.ipynb
-│   ├── 02_model_understanding.ipynb
-│   ├── 03_data_preprocessing.ipynb
-│   ├── 04_evaluation_analysis.ipynb
-│   ├── 05_debug_dtype_issue.ipynb
-│   ├── 06_quantization_and_trainable_params.ipynb
-│   ├── 07_deployment_vllm_triton.ipynb
-│   ├── 08_vllm_performance_analysis.ipynb
-│   ├── 09_vllm_memory_experiments.ipynb
-│   ├── 10_Triton.ipynb
-│   ├── debug_repetition_bug.ipynb
-│   └── generate_golden_test_data.ipynb
-└── refactor_documentation/       # Development history (33 sessions)
-```
-
-## 📂 Project Structure - Detailed (src/)
-
-### `src/data/`
-| File | Description |
-|------|-------------|
-| `dataset.py` | Convert raw data to conversation format with image placeholders |
-| `collators.py` | Batch collation: `AllTokensCollator`, `AssistantOnlyCollator` |
-
-### `src/models/`
-| File | Description |
-|------|-------------|
-| `loader.py` | Load Qwen2-VL with 4-bit quantization and device_map |
-| `lora.py` | LoRA config (r=64, alpha=128) and target modules |
-| `inference.py` | Single image inference and bbox output parsing |
-
-### `src/training/`
-| File | Description |
-|------|-------------|
-| `config.py` | SFTConfig creation and training variants |
-| `evaluation.py` | IoU-based evaluation metrics |
-| `callbacks.py` | *(LEGACY)* Flash attention debug callbacks, not currently used |
-
-### `src/utils/`
-| File | Description |
-|------|-------------|
-| `gpu.py` | Auto-detect GPUs, setup CUDA_VISIBLE_DEVICES |
-| `visualization.py` | Plotting and visualization helpers |
-| `debug.py` | Debugging utilities |
-
-## 📜 Scripts Folder
-
-> See [`scripts/README.md`](scripts/README.md) for detailed per-script documentation.
-
-### Training
-
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `train_recipe.py` | Flexible recipe-based training with CLI args | **Recommended** for all training runs |
-| `train.py` | Simple training script (~150 lines) with hardcoded config | Learning the codebase, quick experiments |
-| `run_recipes.sh` | Bash wrapper with simpler syntax | Convenience for running recipes |
-
-### Model Preparation
-
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `merge_lora.py` | Merge LoRA adapters into base model | Before deployment or quantization |
-| `quantize_model_gptq.py` | GPTQ INT4 quantization of merged model | Creating quantized model for faster inference (requires `gptqmodel>=2.2.0`) |
-
-### Serving & Deployment
-
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `serve_vllm.py` | Start standalone vLLM OpenAI-compatible server | Local development, standalone serving |
-| `deploy_triton.sh` | Start Triton via Docker with pre-flight checks | Alternative to Dockerfile for manual deployment |
-| `setup_triton.py` | Generate Triton config files from CLI args | Initial config generation (configs now maintained by hand in `triton_model_repository/`) |
-
-### Benchmarking & Evaluation
-
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `benchmark_vllm.py` | Benchmark standalone vLLM (latency, throughput, concurrency sweeps) | Evaluating vLLM serving performance |
-| `benchmark_triton.py` | Benchmark Triton HTTP `/generate` endpoint (async, concurrency) | Evaluating Triton deployment performance |
-| `benchmark_hf_baseline.py` | Benchmark HuggingFace Transformers baseline (static batching) | Comparing against vLLM/Triton |
-| `evaluate_vllm_accuracy.py` | Evaluate vLLM accuracy with IoU metrics on validation set | Accuracy evaluation after deployment |
-| `establish_baseline.py` | Establish baseline accuracy for quantization comparison | Before/after quantization comparison |
-| `validate_triton_accuracy.py` | Validate Triton deployment produces correct outputs | Sanity check after Triton deployment |
-
-### Quick Tests
-
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `quick_test_vllm_api.py` | Send 1 request to vLLM, print raw output | Smoke test: is the server responding? |
-| `quick_test_vllm_with_visualization.py` | Send 1 request + parse bbox + draw on image | Smoke test with visual verification |
-
-### Common Workflows
-
-| Task | One-liner |
-|------|-----------|
-| Train best recipe (r4-joint) | `python scripts/train_recipe.py --recipe r4-joint --gpu 0,1` |
-| Merge LoRA adapter to standalone BF16 model | `python scripts/merge_lora.py --adapter-path <adapter_dir> --output-path <merged_dir>` |
-| Quantize merged model to GPTQ INT4 | `python scripts/quantize_model_gptq.py --model-path <merged_dir> --output-path <gptq_dir>` |
-| Start standalone vLLM server | `python scripts/serve_vllm.py --gpu 0 --port 8000` |
-| Quick API sanity check | `python scripts/quick_test_vllm_api.py` |
-| Benchmark standalone vLLM | `python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images` |
-| Benchmark Triton | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
-| Validate Triton vs baseline | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
+- `environment.yml`, `requirements.txt` - Training environment (see [Environment & Requirements](#-environment--requirements))
 
 ## 📊 Dataset
 
@@ -400,55 +248,6 @@ python scripts/train_recipe.py --recipe r2-vision-only --gpu 2,3
 python scripts/train_recipe.py --recipe r4-joint --gpu 4,5
 ```
 
-## 📈 Performance Results
-
-### Training Accuracy
-
-Based on evaluation of a 50-sample validation slice (HuggingFace inference):
-
-| Metric | r4-joint (Best) |
-|--------|-----------------|
-| **Mean IoU** | 0.8636 |
-| **Median IoU** | 0.89 |
-| **Detection Rate** | 100% |
-| **IoU > 0.5** | 92% |
-| **IoU > 0.7** | 88% |
-
-### Serving Accuracy (vLLM, 100 validation samples)
-
-| Metric | BF16 | GPTQ INT4 | Drift |
-|--------|------|-----------|-------|
-| **Mean IoU** | 0.846 | 0.840 | -0.7% |
-| **Detection Rate** | 100% | 100% | — |
-| **IoU > 0.5** | — | 91% | — |
-| **IoU > 0.7** | — | 86% | — |
-
-GPTQ INT4 quantization has minimal accuracy loss (<1% IoU drift) compared to BF16.
-
-### Inference Latency and Throughput
-
-**Triton Inference Server on RTX 4090** (unbiased: varied images, prefix caching disabled):
-
-| Model | Concurrency | P50 Latency | Throughput |
-|-------|-------------|-------------|------------|
-| GPTQ INT4 | c=1 | 470 ms | 1.65 req/s |
-| GPTQ INT4 | c=4 | 1,013 ms | 3.94 req/s |
-| BF16 | c=1 | 703 ms | 1.19 req/s |
-| BF16 | c=4 | 1,236 ms | 3.23 req/s |
-
-**Standalone vLLM on RTX 3090** (unbiased, no prefix caching):
-
-| Model | Concurrency | P50 Latency | Throughput |
-|-------|-------------|-------------|------------|
-| BF16 | c=1 | 907 ms | 1.09 req/s |
-| BF16 | c=8 | 2,138 ms | 3.17 req/s |
-
-**Key takeaways:**
-- GPTQ INT4 is ~1.5x faster than BF16 at P50 latency (470ms vs 703ms)
-- RTX 4090 is ~1.7x faster than RTX 3090 for the same model
-- Higher concurrency increases throughput but also per-request latency
-- Triton accuracy (mean IoU) not yet verified — pending (since Triton wraps vLLM, results should be identical)
-
 ## 📁 Training Output Structure
 
 Running `scripts/train_recipe.py` creates outputs in `/ssd1/zhuoyuan/vlm_outputs/`:
@@ -475,7 +274,7 @@ Running `scripts/train_recipe.py` creates outputs in `/ssd1/zhuoyuan/vlm_outputs
 
 **Storage Strategy**: All large files on SSD to preserve home directory quota (~100GB).
 
-## 🔨 Model Preparation
+## 🔨 Model Preparation for Deployment
 
 After training, prepare the model for deployment by merging LoRA adapters and optionally quantizing.
 
@@ -695,6 +494,207 @@ python scripts/benchmark_triton.py \
     --concurrency 1 --num-requests 20 --vary-images
 ```
 
+## 📈 Performance Results
+
+### Training Accuracy
+
+Based on evaluation of a 50-sample validation slice (HuggingFace inference):
+
+| Metric | r4-joint (Best) |
+|--------|-----------------|
+| **Mean IoU** | 0.8636 |
+| **Median IoU** | 0.89 |
+| **Detection Rate** | 100% |
+| **IoU > 0.5** | 92% |
+| **IoU > 0.7** | 88% |
+
+### Serving Accuracy (vLLM, 100 validation samples)
+
+| Metric | BF16 | GPTQ INT4 | Drift |
+|--------|------|-----------|-------|
+| **Mean IoU** | 0.846 | 0.840 | -0.7% |
+| **Detection Rate** | 100% | 100% | — |
+| **IoU > 0.5** | — | 91% | — |
+| **IoU > 0.7** | — | 86% | — |
+
+GPTQ INT4 quantization has minimal accuracy loss (<1% IoU drift) compared to BF16.
+
+### Inference Latency and Throughput
+
+**Triton Inference Server on RTX 4090** (unbiased: varied images, prefix caching disabled):
+
+| Model | Concurrency | P50 Latency | Throughput |
+|-------|-------------|-------------|------------|
+| GPTQ INT4 | c=1 | 470 ms | 1.65 req/s |
+| GPTQ INT4 | c=4 | 1,013 ms | 3.94 req/s |
+| BF16 | c=1 | 703 ms | 1.19 req/s |
+| BF16 | c=4 | 1,236 ms | 3.23 req/s |
+
+**Standalone vLLM on RTX 3090** (unbiased, no prefix caching):
+
+| Model | Concurrency | P50 Latency | Throughput |
+|-------|-------------|-------------|------------|
+| BF16 | c=1 | 907 ms | 1.09 req/s |
+| BF16 | c=8 | 2,138 ms | 3.17 req/s |
+
+**Key takeaways:**
+- GPTQ INT4 is ~1.5x faster than BF16 at P50 latency (470ms vs 703ms)
+- RTX 4090 is ~1.7x faster than RTX 3090 for the same model
+- Higher concurrency increases throughput but also per-request latency
+- Triton accuracy (mean IoU) not yet verified — pending (since Triton wraps vLLM, results should be identical)
+
+## 🏗️ Project Structure - Overview
+
+```
+vlm_Qwen2VL_object_detection/
+├── Dockerfile                    # Triton deployment image (see Deployment section)
+├── docker/
+│   └── entrypoint.sh             # Model selection + Triton startup script
+├── src/                          # Modular source code
+│   ├── data/                     # Dataset preparation & collation
+│   ├── models/                   # Model loading & configuration
+│   ├── training/                 # Training utilities & evaluation
+│   └── utils/                    # GPU management & visualization
+├── scripts/                      # Training & deployment scripts
+│   ├── train.py                  # Simple single-config training
+│   ├── train_recipe.py           # Flexible recipe-based training (recommended)
+│   ├── run_recipes.sh            # Bash wrapper for train_recipe.py
+│   ├── benchmark_triton.py       # Triton HTTP benchmark (async)
+│   ├── benchmark_vllm.py         # Standalone vLLM benchmark
+│   └── serve_vllm.py             # Standalone vLLM serving wrapper
+├── triton_model_repository/      # Triton Inference Server configs
+│   ├── qwen2vl_nutrition_gptq_int4/  # GPTQ INT4 model config
+│   │   ├── config.pbtxt
+│   │   └── 1/model.json
+│   └── qwen2vl_nutrition_bf16/       # BF16 model config
+│       ├── config.pbtxt
+│       └── 1/model.json
+├── tests/                        # Test suite
+│   ├── test_data_format_before_chat_template.py
+│   └── test_golden_output.py
+├── notebooks/                    # Educational notebooks (topic-specific deep dives)
+│   ├── 01_dataset_exploration.ipynb
+│   ├── 02_model_understanding.ipynb
+│   ├── 03_data_preprocessing.ipynb
+│   ├── 04_evaluation_analysis.ipynb
+│   ├── 05_debug_dtype_issue.ipynb
+│   ├── 06_quantization_and_trainable_params.ipynb
+│   ├── 07_deployment_vllm_triton.ipynb
+│   ├── 08_vllm_performance_analysis.ipynb
+│   ├── 09_vllm_memory_experiments.ipynb
+│   ├── 10_Triton.ipynb
+│   ├── debug_repetition_bug.ipynb
+│   └── generate_golden_test_data.ipynb
+└── refactor_documentation/       # Development history (33 sessions)
+```
+
+## 📂 Project Structure - Detailed (src/)
+
+### `src/data/`
+| File | Description |
+|------|-------------|
+| `dataset.py` | Convert raw data to conversation format with image placeholders |
+| `collators.py` | Batch collation: `AllTokensCollator`, `AssistantOnlyCollator` |
+
+### `src/models/`
+| File | Description |
+|------|-------------|
+| `loader.py` | Load Qwen2-VL with 4-bit quantization and device_map |
+| `lora.py` | LoRA config (r=64, alpha=128) and target modules |
+| `inference.py` | Single image inference and bbox output parsing |
+
+### `src/training/`
+| File | Description |
+|------|-------------|
+| `config.py` | SFTConfig creation and training variants |
+| `evaluation.py` | IoU-based evaluation metrics |
+| `callbacks.py` | *(LEGACY)* Flash attention debug callbacks, not currently used |
+
+### `src/utils/`
+| File | Description |
+|------|-------------|
+| `gpu.py` | Auto-detect GPUs, setup CUDA_VISIBLE_DEVICES |
+| `visualization.py` | Plotting and visualization helpers |
+| `debug.py` | Debugging utilities |
+
+## 📜 Scripts Folder
+
+> See [`scripts/README.md`](scripts/README.md) for detailed per-script documentation.
+
+### Training
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `train_recipe.py` | Flexible recipe-based training with CLI args | **Recommended** for all training runs |
+| `train.py` | Simple training script (~150 lines) with hardcoded config | Learning the codebase, quick experiments |
+| `run_recipes.sh` | Bash wrapper with simpler syntax | Convenience for running recipes |
+
+### Model Preparation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `merge_lora.py` | Merge LoRA adapters into base model | Before deployment or quantization |
+| `quantize_model_gptq.py` | GPTQ INT4 quantization of merged model | Creating quantized model for faster inference (requires `gptqmodel>=2.2.0`) |
+
+### Serving & Deployment
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `serve_vllm.py` | Start standalone vLLM OpenAI-compatible server | Local development, standalone serving |
+| `deploy_triton.sh` | Start Triton via Docker with pre-flight checks | Alternative to Dockerfile for manual deployment |
+| `setup_triton.py` | Generate Triton config files from CLI args | Initial config generation (configs now maintained by hand in `triton_model_repository/`) |
+
+### Benchmarking & Evaluation
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `benchmark_vllm.py` | Benchmark standalone vLLM (latency, throughput, concurrency sweeps) | Evaluating vLLM serving performance |
+| `benchmark_triton.py` | Benchmark Triton HTTP `/generate` endpoint (async, concurrency) | Evaluating Triton deployment performance |
+| `benchmark_hf_baseline.py` | Benchmark HuggingFace Transformers baseline (static batching) | Comparing against vLLM/Triton |
+| `evaluate_vllm_accuracy.py` | Evaluate vLLM accuracy with IoU metrics on validation set | Accuracy evaluation after deployment |
+| `establish_baseline.py` | Establish baseline accuracy for quantization comparison | Before/after quantization comparison |
+| `validate_triton_accuracy.py` | Validate Triton deployment produces correct outputs | Sanity check after Triton deployment |
+
+### Quick Tests
+
+| Script | Purpose | When to Use |
+|--------|---------|-------------|
+| `quick_test_vllm_api.py` | Send 1 request to vLLM, print raw output | Smoke test: is the server responding? |
+| `quick_test_vllm_with_visualization.py` | Send 1 request + parse bbox + draw on image | Smoke test with visual verification |
+
+### Common Workflows
+
+| Task | One-liner |
+|------|-----------|
+| Train best recipe (r4-joint) | `python scripts/train_recipe.py --recipe r4-joint --gpu 0,1` |
+| Merge LoRA adapter to standalone BF16 model | `python scripts/merge_lora.py --adapter-path <adapter_dir> --output-path <merged_dir>` |
+| Quantize merged model to GPTQ INT4 | `python scripts/quantize_model_gptq.py --model-path <merged_dir> --output-path <gptq_dir>` |
+| Start standalone vLLM server | `python scripts/serve_vllm.py --gpu 0 --port 8000` |
+| Quick API sanity check | `python scripts/quick_test_vllm_api.py` |
+| Benchmark standalone vLLM | `python scripts/benchmark_vllm.py --port 8000 --num-requests 20 --concurrency 8 --vary-images` |
+| Benchmark Triton | `python scripts/benchmark_triton.py --model qwen2vl_nutrition_gptq_int4 --endpoint http --num-requests 20 --concurrency 4 --vary-images` |
+| Validate Triton vs baseline | `python scripts/validate_triton_accuracy.py --model qwen2vl_nutrition_gptq_int4 --baseline <bf16_baseline.json>` |
+
+<details>
+<summary><strong>📓 Notebook Guide</strong></summary>
+
+| Notebook | Focus | Prerequisites | Run All |
+|----------|-------|---------------|---------|
+| `notebooks/01_dataset_exploration.ipynb` | Dataset EDA and sample inspection | Dev/training env | Yes |
+| `notebooks/02_model_understanding.ipynb` | Qwen2-VL architecture walkthrough | Dev/training env | Yes |
+| `notebooks/03_data_preprocessing.ipynb` | Data formatting and chat-template pipeline | Dev/training env | Yes |
+| `notebooks/04_evaluation_analysis.ipynb` | Evaluation metrics and IoU interpretation | Dev/training env + result files | Yes |
+| `notebooks/05_debug_dtype_issue.ipynb` | Dtype/device debugging notes | Dev/training env | Yes |
+| `notebooks/06_quantization_and_trainable_params.ipynb` | Quantization concepts and trainable parameter checks | Dev/training env | Yes |
+| `notebooks/07_deployment_vllm_triton.ipynb` | Step-by-step vLLM/Triton deployment walkthrough | vLLM server for runnable vLLM cells; Triton/Docker optional for Triton cells | Partial |
+| `notebooks/08_vllm_performance_analysis.ipynb` | vLLM benchmark analysis and metric interpretation | Benchmark result files + (optional) running vLLM server | Partial |
+| `notebooks/09_vllm_memory_experiments.ipynb` | vLLM memory/concurrency experiments | Running vLLM server; GPU access | Partial |
+| `notebooks/10_Triton.ipynb` | Triton deployment and serving walkthrough | Triton server (usually Docker) | Partial |
+| `notebooks/debug_repetition_bug.ipynb` | Debug diary for output repetition bug | Dev/training env | Yes |
+| `notebooks/generate_golden_test_data.ipynb` | Generate golden test data for test fixtures | Dev/training env | Yes |
+
+</details>
+
 ## 🔁 Notebook ⇄ Script Sync (Jupytext)
 
 > **Note**: Replace paths below with your project location.
@@ -731,3 +731,4 @@ python scripts/benchmark_triton.py \
 ## 📄 License
 
 For educational purposes. Check individual licenses for Qwen2-VL model and datasets.
+
