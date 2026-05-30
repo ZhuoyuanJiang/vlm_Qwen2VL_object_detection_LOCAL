@@ -734,3 +734,16 @@ vlm_Qwen2VL_object_detection/
 
 For educational purposes. Check individual licenses for Qwen2-VL model and datasets.
 
+
+## 📚 Citation
+
+If you find this project useful, please consider citing it:
+
+```bibtex
+@software{jiang2025vlmobjectdetection,
+  author = {Zhuoyuan Jiang},
+  title  = {Qwen2-VL Fine-tuning for Nutrition-Facts Table Detection},
+  year   = {2025},
+  url    = {https://github.com/ZhuoyuanJiang/vlm_Qwen2VL_object_detection_LOCAL}
+}
+```
